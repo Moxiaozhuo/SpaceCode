@@ -81,7 +81,7 @@ export default defineConfig({
         'src/stores/**': { statements: 44 }, // 45.9%
         'electron/cron/**': { statements: 70 }, // 72.7%
         'electron/engine/**': { statements: 20 }, // 21.5% (cliDetector 探测层)
-        'electron/tools/**': { statements: 7 }, // 7.4% (MCP 配置注入 + officecli 定位)
+        'electron/tools/**': { statements: 13 }, // 13.7% (MCP 配置注入 + 探测 + officecli 定位)
         'electron/skillManagerV2/**': { statements: 72 }, // 74.8%
       },
     },
