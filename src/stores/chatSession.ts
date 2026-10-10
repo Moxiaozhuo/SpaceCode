@@ -1821,16 +1821,39 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     if (turnCheckpoints.value.length === 0) return []
 
     const latestIndex = turnCheckpoints.value.length - 1
+    const messages = currentMessages.value
 
     return turnCheckpoints.value.map((checkpoint, index) => ({
       checkpoint,
       workDir: checkpoint.workDir ?? null,
       isLatest: index === latestIndex,
       targetUserMessageId: checkpoint.target.targetUserMessageId
-    })).filter(card =>
-      card.checkpoint.code.available &&
-      card.checkpoint.code.filesChanged.length > 0
-    )
+    })).filter(card => {
+      // 基本条件：有代码改动且可用
+      if (!card.checkpoint.code.available || card.checkpoint.code.filesChanged.length === 0) {
+        return false
+      }
+
+      // 只显示对应轮次已完成的卡片：找到 target user message 之后的第一条 assistant 消息，
+      // 如果该消息存在且有实质性内容（content 或 toolCalls），说明轮次已完成
+      const userMsgIndex = messages.findIndex(m => m.id === card.targetUserMessageId)
+      if (userMsgIndex === -1) return false
+
+      // 找到该 user 消息之后的第一条 assistant 消息
+      const assistantMsg = messages.slice(userMsgIndex + 1).find(m => m.role === 'assistant')
+
+      // 如果没有 assistant 消息，说明轮次还没开始，不显示
+      if (!assistantMsg) return false
+
+      // 如果 assistant 消息没有内容（空消息或正在 streaming 初始阶段），不显示
+      // 我们认为有 content 或有 toolCalls 才算是轮次有实质性进展
+      const hasContent = assistantMsg.content && assistantMsg.content.trim().length > 0
+      const hasToolCalls = assistantMsg.toolCalls && assistantMsg.toolCalls.length > 0
+
+      if (!hasContent && !hasToolCalls) return false
+
+      return true
+    })
   })
 
   function migrateOldData() {
