@@ -2,7 +2,7 @@ import { defineStore } from 'pinia'
 import { ref, computed, readonly } from 'vue'
 import type { Session, Message, ToolCall, AgentInfo, SessionTurnCheckpoint, TurnChangeCardData, TeammateStatus, ArtifactSummaryEntry, MessageMetadata } from '@/types'
 import type { RewindOption } from '@/types/rewind'
-import { messages } from '@/i18n'
+import { messages, i18n } from '@/i18n'
 import { useRewindDialog } from '@/composables/useRewindDialog'
 import { useSettingsStore } from './settings'
 import { useAppStore } from './app'
@@ -11,6 +11,7 @@ import { getCompletedTurnTargets } from '@/utils/turnCheckpointUtils'
 import { syncTaskStateFromToolCall } from '@/utils/taskToolSync'
 import { api } from '@/services/electronAPI'
 import { errorHandler } from '@/services/errorHandler'
+import { generateSessionTitle } from '@/services/aiSessionTitle'
 import { createUuid } from '@/utils/uuid'
 import { buildMessagesFromHistory } from '@/utils/sessionRestore'
 import { normalizeAbsolutePath } from '@/utils/normalizePath'
@@ -51,6 +52,9 @@ const PLACEHOLDER_SESSION_TITLES = new Set<string>(
     .filter((v): v is string => !!v),
 )
 PLACEHOLDER_SESSION_TITLES.add('New Chat')
+
+// AI 标题请求的 in-flight 互斥：结果返回前同一会话不重复发起，避免重发消息反复烧 token。
+const aiTitlePendingSessions = new Set<string>()
 
 // 单会话在内存中保留的最大消息数。
 // 长时间运行的 agent 任务会不断追加消息（每轮 LLM 调用 + 工具调用 + 工具结果），
@@ -1300,11 +1304,45 @@ export const useChatSessionStore = defineStore('chatSession', () => {
       if (session.messages.length === 1 && newMessage.role === 'user' && PLACEHOLDER_SESSION_TITLES.has(session.title)) {
         const newTitle = newMessage.content.slice(0, 50) + (newMessage.content.length > 50 ? '...' : '')
         session.title = newTitle
+        if (settingsStore.aiSessionTitleEnabled) {
+          void applyAiSessionTitle(session.id, newMessage.content, newTitle)
+        }
       }
       saveToStorage()
     }
 
     return newMessage
+  }
+
+  function renameSession(sessionId: string, newTitle: string): boolean {
+    const session = sessions.value.find(s => s.id === sessionId)
+    if (!session) return false
+    session.title = newTitle
+    saveToStorage()
+    window.dispatchEvent(new CustomEvent('session-updated'))
+    return true
+  }
+
+  /**
+   * AI 标题是异步补写：截取名先落地保证即时反馈，结果回来后只在标题仍等于那次截取名
+   * 时才替换 —— 期间用户手动改名或会话被删除，都意味着不该覆盖。
+   */
+  async function applyAiSessionTitle(sessionId: string, userMessage: string, truncatedTitle: string) {
+    if (aiTitlePendingSessions.has(sessionId)) return
+    aiTitlePendingSessions.add(sessionId)
+    try {
+      const isZh = i18n.global.locale.value === 'zh-CN'
+      const title = await generateSessionTitle(userMessage, isZh)
+      if (!title) return
+      const session = sessions.value.find(s => s.id === sessionId)
+      if (session && session.title === truncatedTitle) {
+        renameSession(sessionId, title)
+      }
+    } catch (err) {
+      console.warn('[chatSession] AI session title failed:', err)
+    } finally {
+      aiTitlePendingSessions.delete(sessionId)
+    }
   }
 
   function updateMessage(messageId: string, updates: Partial<Message>, targetSessionId?: string) {
@@ -2140,6 +2178,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     createSession,
     initClaudeCodeSession,
     addMessage,
+    renameSession,
     updateMessage,
     updateToolCall,
     // SessionSink seam（Turn store 消费）
