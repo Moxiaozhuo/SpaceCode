@@ -19,6 +19,16 @@ const runtime = vi.hoisted(() => ({
   files: new Set<string>(),
 }))
 
+const cp = vi.hoisted(() => ({
+  spawnSync: vi.fn(),
+  spawn: vi.fn(),
+}))
+
+vi.mock('child_process', () => ({
+  spawnSync: cp.spawnSync,
+  spawn: cp.spawn,
+}))
+
 vi.mock('electron', () => ({
   app: {
     get isPackaged() {
@@ -82,6 +92,7 @@ afterEach(() => {
 
 beforeEach(() => {
   runtime.files.clear()
+  cp.spawnSync.mockReset().mockReturnValue({ status: null, stdout: '' })
 })
 
 describe('getOfficeCliBinaryPath', () => {
@@ -145,6 +156,35 @@ describe('resolveOfficeCliBinary', () => {
 
     // No bundled file and no user install. A dev build would now shell out to
     // find `officecli` on PATH; a packaged build must return null instead.
+    expect(resolveOfficeCliBinary()).toBeNull()
+    expect(cp.spawnSync).not.toHaveBeenCalled()
+  })
+
+  it('probes the system PATH with the platform exe name in dev mode', () => {
+    useRuntime({ platform: 'win32' })
+    cp.spawnSync.mockReturnValue({ status: 0, stdout: 'officecli 1.2.3' })
+
+    expect(resolveOfficeCliBinary()).toBe('officecli.exe')
+    expect(cp.spawnSync).toHaveBeenCalledWith(
+      'officecli.exe',
+      ['--version'],
+      expect.objectContaining({ windowsHide: true, encoding: 'utf-8' }),
+    )
+  })
+
+  it('rejects a PATH hit whose --version does not exit cleanly', () => {
+    useRuntime({ platform: 'linux' })
+    cp.spawnSync.mockReturnValue({ status: 1, stdout: 'unknown command' })
+
+    expect(resolveOfficeCliBinary()).toBeNull()
+  })
+
+  it('treats a spawn failure during the PATH probe as not found', () => {
+    useRuntime({ platform: 'linux' })
+    cp.spawnSync.mockImplementation(() => {
+      throw Object.assign(new Error('spawnSync officecli ENOENT'), { code: 'ENOENT' })
+    })
+
     expect(resolveOfficeCliBinary()).toBeNull()
   })
 })
