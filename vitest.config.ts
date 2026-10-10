@@ -74,7 +74,7 @@ export default defineConfig({
       // brand-new module merged at 0%. Raise each in step with the coverage
       // plan; delete a floor only together with the tests that earned it.
       thresholds: {
-        statements: 29,
+        statements: 30,
         branches: 23,
         // 62.2% committed; in-flight tests/lib/trace-*.test.ts lift it to 83.9%
         // — raise this to 80 when those land.
@@ -82,6 +82,7 @@ export default defineConfig({
         'src/utils/**': { statements: 65 }, // 67.2%
         'src/stores/**': { statements: 44 }, // 45.9%
         'electron/cron/**': { statements: 70 }, // 72.7%
+        'electron/engine/**': { statements: 20 }, // 21.5% (cliDetector 探测层)
         'electron/skillManagerV2/**': { statements: 72 }, // 74.8%
       },
     },
