@@ -125,7 +125,7 @@ describe('detectInstalledCli — lookup order', () => {
   it('falls through to the npm global root when PATH lookup misses', async () => {
     detector = await loadCliDetector('linux')
     const npmRoot = path.join('/usr', 'lib', 'node_modules')
-    const binLink = path.join(npmRoot, '.bin', 'claude-code')
+    const binLink = path.join(npmRoot, '.bin', 'claude')
     harness.existing.add(path.join(npmRoot, '@anthropic-ai', 'claude-code'))
     harness.existing.add(binLink)
     harness.respond = (c) => {
@@ -310,10 +310,10 @@ describe('findInPath — Windows .cmd shims', () => {
 })
 
 describe('npm global and common paths', () => {
-  it('resolves the <npmRoot>/<name>.cmd shim on Windows when it is present', async () => {
+  it('resolves the bin .cmd shim on Windows, not the package name', async () => {
     detector = await loadCliDetector('win32', { APPDATA: undefined, LOCALAPPDATA: undefined })
     const npmRoot = path.join('C:\\', 'npm', 'global')
-    const cmdShim = path.join(npmRoot, 'claude-code.cmd')
+    const cmdShim = path.join(npmRoot, 'claude.cmd')
     harness.existing.add(path.join(npmRoot, '@anthropic-ai', 'claude-code'))
     harness.existing.add(cmdShim)
     harness.respond = (c) => {
@@ -327,11 +327,15 @@ describe('npm global and common paths', () => {
     expect(result.path).toBe(cmdShim)
   })
 
-  it('returns the package directory when no bin entry exists', async () => {
+  it('resolves .bin/<command> although the package directory is named differently', async () => {
+    // @anthropic-ai/claude-code installs a `claude` bin. Package name and bin
+    // name are separate namespaces, so the existence gate checks one and the
+    // executable lookup checks the other.
     detector = await loadCliDetector('linux')
     const npmRoot = path.join('/usr', 'lib', 'node_modules')
-    const pkgDir = path.join(npmRoot, '@anthropic-ai', 'claude-code')
-    harness.existing.add(pkgDir)
+    const binLink = path.join(npmRoot, '.bin', 'claude')
+    harness.existing.add(path.join(npmRoot, '@anthropic-ai', 'claude-code'))
+    harness.existing.add(binLink)
     harness.respond = (c) => {
       if (isLookup(c)) return lookupResult(null)
       if (isNpmRoot(c)) return { stdout: npmRoot }
@@ -340,33 +344,28 @@ describe('npm global and common paths', () => {
     }
 
     const result = await detector.detectInstalledCli()
-    expect(result.path).toBe(pkgDir)
+    expect(result.path).toBe(binLink)
+    expect(result.version).toBe('1.0.0')
   })
 
-  it('DEFECT: looks for claude-code where npm installed claude, so the real bin is never probed', async () => {
-    // checkNpmGlobal uses its single argument for both the package directory
-    // (@anthropic-ai/<arg>) and the executable (<npmRoot>/.bin/<arg>, or
-    // <npmRoot>/<arg>.cmd on Windows). detectInstalledCli passes the *package*
-    // name 'claude-code' while both sibling lookups use the *command* name
-    // 'claude', so an npm-global install that is not on PATH resolves to the
-    // package directory — not an executable — and the version probe fails.
-    // The fix is to split package name from bin name; flip these assertions
-    // when that lands.
+  it('reports unavailable when the package is installed but no bin link exists', async () => {
+    // The package directory is not executable, so handing it back would report
+    // "found" with a path that cannot run. Miss the bin and the caller falls
+    // through to the common-path scan, then says unavailable.
     detector = await loadCliDetector('linux')
     const npmRoot = path.join('/usr', 'lib', 'node_modules')
     harness.existing.add(path.join(npmRoot, '@anthropic-ai', 'claude-code'))
-    harness.existing.add(path.join(npmRoot, '.bin', 'claude'))
     harness.respond = (c) => {
       if (isLookup(c)) return lookupResult(null)
       if (isNpmRoot(c)) return { stdout: npmRoot }
-      if (isVersionProbe(c)) return { error: new Error('EACCES: permission denied') }
-      return { stdout: '' }
+      return { error: new Error('EACCES: permission denied') }
     }
 
-    const result = await detector.detectInstalledCli()
-    expect(result.path).toBe(path.join(npmRoot, '@anthropic-ai', 'claude-code'))
-    expect(result.version).toBeNull()
-    expect(result.versionCompatible).toBe(false)
+    await expect(detector.detectInstalledCli()).resolves.toEqual({
+      available: false,
+      path: null,
+      version: null,
+    })
   })
 
   it('scans %APPDATA%\\npm on Windows', async () => {
