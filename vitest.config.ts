@@ -74,14 +74,14 @@ export default defineConfig({
       // brand-new module merged at 0%. Raise each in step with the coverage
       // plan; delete a floor only together with the tests that earned it.
       thresholds: {
-        statements: 30,
-        branches: 23,
+        statements: 31,
+        branches: 25,
         'src/lib/**': { statements: 80 }, // 83.9% (trace/sse + request 解析后)
         'src/utils/**': { statements: 65 }, // 67.2%
         'src/stores/**': { statements: 44 }, // 45.9%
         'electron/cron/**': { statements: 70 }, // 72.7%
         'electron/engine/**': { statements: 20 }, // 21.5% (cliDetector 探测层)
-        'electron/tools/**': { statements: 19 }, // 19.2% (MCP 配置注入 + 探测 + python/cua-driver/officecli 定位)
+        'electron/tools/**': { statements: 24 }, // 24.4% (探测/定位/RTK 统计与 hook 判定)
         'electron/skillManagerV2/**': { statements: 72 }, // 74.8%
       },
     },
