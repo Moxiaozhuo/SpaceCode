@@ -76,9 +76,7 @@ export default defineConfig({
       thresholds: {
         statements: 30,
         branches: 23,
-        // 62.2% committed; in-flight tests/lib/trace-*.test.ts lift it to 83.9%
-        // — raise this to 80 when those land.
-        'src/lib/**': { statements: 60 },
+        'src/lib/**': { statements: 80 }, // 83.9% (trace/sse + request 解析后)
         'src/utils/**': { statements: 65 }, // 67.2%
         'src/stores/**': { statements: 44 }, // 45.9%
         'electron/cron/**': { statements: 70 }, // 72.7%

@@ -54,7 +54,7 @@ vi.mock('../../infra/logger', () => ({
 }))
 
 const resolver = vi.hoisted(() => ({
-  builtinNameFromServerKey: vi.fn(() => null as string | null),
+  builtinNameFromServerKey: vi.fn((_key: string) => null as string | null),
   resolveBuiltinMcp: vi.fn(),
 }))
 
