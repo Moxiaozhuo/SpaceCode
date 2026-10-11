@@ -81,6 +81,7 @@ export default defineConfig({
         'src/stores/**': { statements: 44 }, // 45.9%
         'electron/cron/**': { statements: 70 }, // 72.7%
         'electron/engine/**': { statements: 20 }, // 21.5% (cliDetector 探测层)
+        'electron/session/**': { statements: 42 }, // 42.2% (turnCheckpointService 检查点/rewind 全链路)
         'electron/tools/**': { statements: 24 }, // 24.4% (探测/定位/RTK 统计与 hook 判定)
         'electron/skillManagerV2/**': { statements: 72 }, // 74.8%
       },
