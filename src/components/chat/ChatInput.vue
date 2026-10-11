@@ -51,8 +51,11 @@
         <Clock :size="14" class="pending-icon" />
         <span class="pending-text">{{ msg.displayLabel || msg.content }}</span>
         <span class="pending-priority-tag">{{ msg.priority === 'later' ? t('chatInput.priorityLater') : t('chatInput.priorityNow') }}</span>
-        <button class="pending-action-btn" @click="recallPendingMsg(msg.id)" :title="t('chatInput.recallPending')">
+        <button class="pending-action-btn" @click="sendPendingNow(msg.id)" :title="t('chatInput.sendPendingNow')">
           <ArrowUp :size="14" />
+        </button>
+        <button class="pending-action-btn" @click="recallPendingMsg(msg.id)" :title="t('chatInput.recallPending')">
+          <ArrowDown :size="14" />
         </button>
         <button class="pending-action-btn" @click="removePendingMsg(msg.id)" :title="t('chatInput.removePending')">
           <X :size="14" />
@@ -392,7 +395,7 @@
 <script setup lang="ts">
 import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, nextTick } from 'vue'
 import {
-  ArrowUp, Plus, ChevronDown, Check, Square, X,
+  ArrowUp, ArrowDown, Plus, ChevronDown, Check, Square, X,
   Search, Loader2, RefreshCw, AlertCircle, Zap, FolderOpen, Brain,
   Sparkles, Image, ChevronRight, Archive, Clock, LayoutGrid, Settings, Quote
 } from 'lucide-vue-next'
@@ -832,6 +835,18 @@ function recallPendingMsg(msgId: string) {
 function removePendingMsg(msgId: string) {
   const sid = editorSessionId.value
   if (sid) turnStore.removePendingMessage(sid, msgId)
+}
+
+function sendPendingNow(msgId: string) {
+  const sid = editorSessionId.value
+  if (!sid) return
+  const recalled = turnStore.recallPendingMessage(sid, msgId)
+  if (!recalled) return
+  const allAttachments = collectAllAttachments(
+    recalled.attachments.map(f => ({ ...f })),
+    recalled.images.map(img => ({ ...img })),
+  )
+  emit('send', recalled.content, allAttachments)
 }
 
 // ── Thinking toggle ──────────────────────────────────────────────
