@@ -79,6 +79,7 @@ export default defineConfig({
         'src/lib/**': { statements: 80 }, // 83.9% (trace/sse + request 解析后)
         'src/utils/**': { statements: 65 }, // 67.2%
         'src/stores/**': { statements: 44 }, // 45.9%
+        'src/services/**': { statements: 37 }, // 37.6% (teamTranscriptService 子代理转录归一化与轮询)
         'electron/cron/**': { statements: 70 }, // 72.7%
         'electron/engine/**': { statements: 20 }, // 21.5% (cliDetector 探测层)
         'electron/session/**': { statements: 42 }, // 42.2% (turnCheckpointService 检查点/rewind 全链路)
