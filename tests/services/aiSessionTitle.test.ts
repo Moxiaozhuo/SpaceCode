@@ -115,12 +115,24 @@ describe('AI session title generation', () => {
     expect(mocks.sendMessage).toHaveBeenCalledOnce()
   })
 
-  it('sends the small max tokens and short timeout a title needs', async () => {
+  it('gives reasoning gateways enough completion budget to answer after thinking', async () => {
     mocks.sendMessage.mockResolvedValueOnce('GUI 目录重构')
 
     await generateSessionTitle('帮我重构 GUI 目录结构', true)
 
-    expect(mocks.sendMessage.mock.calls[0][1]).toMatchObject({ maxTokens: 64, timeoutMs: 15000 })
+    // 推理模型先把预算花在 reasoning_content 上，预算小了正文永远是空的
+    expect(mocks.sendMessage.mock.calls[0][1]).toMatchObject({
+      maxTokens: 1024,
+      timeoutMs: 30000,
+      maxRetries: 1,
+    })
+  })
+
+  it('gives up quietly when the gateway answers with an empty body', async () => {
+    // glm-5.2 等推理网关的实测形状：content 为空、finish_reason=length
+    mocks.sendMessage.mockResolvedValueOnce('')
+
+    await expect(generateSessionTitle('帮我重构 GUI 目录结构', true)).resolves.toBeNull()
   })
 
   it('skips the API call for low-signal input so greetings cost nothing', async () => {

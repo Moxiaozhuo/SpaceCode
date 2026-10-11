@@ -3,8 +3,12 @@ import { useSettingsStore } from '@/stores/settings'
 
 const MAX_TITLE_INPUT_CHARS = 2000
 const MAX_TITLE_LENGTH = 40
-const TITLE_MAX_TOKENS = 64
-const TITLE_TIMEOUT_MS = 15_000
+// 推理型网关会先把 completion 预算花在 reasoning_content 上；预算一小就出现
+// finish_reason=length 而 content 始终为空，标题永远取不到（glm / deepseek-r1 等）。
+const TITLE_MAX_TOKENS = 1024
+const TITLE_TIMEOUT_MS = 30_000
+// 标题是后台补写，重试两次拿不到就放弃，不做多次烧 token 的重试风暴。
+const TITLE_MAX_RETRIES = 1
 const NO_TITLE_SENTINELS = new Set(['none', 'null', '无', '没有'])
 
 // 中文没有空格分词，TITLE_WORD 会把整段连续文字切成一个 token，
@@ -90,8 +94,13 @@ export async function generateSessionTitle(userMessage: string, isZh: boolean): 
       system: prompt.system,
       maxTokens: TITLE_MAX_TOKENS,
       timeoutMs: TITLE_TIMEOUT_MS,
+      maxRetries: TITLE_MAX_RETRIES,
     })
-    return normalizeGeneratedTitle(raw)
+    const title = normalizeGeneratedTitle(raw)
+    if (!title) {
+      console.warn(`[aiSessionTitle] 模型未产出可用标题 (model=${cfg.model}, rawLength=${raw.length})`)
+    }
+    return title
   } catch (err) {
     console.warn('[aiSessionTitle] generation failed:', err instanceof Error ? err.message : String(err))
     return null
