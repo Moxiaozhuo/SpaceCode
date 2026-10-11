@@ -1776,6 +1776,16 @@ describe('runDiagnosis / updateSettings', () => {
     expect(store.loading).toBe(false)
     expect(sm.getOverview).not.toHaveBeenCalled()
   })
+
+  it('updateSettings 抛出非 Error 时 error 走 String() 兜底', async () => {
+    const store = useSkillManagerStore()
+    sm.updateSettings.mockRejectedValue('settings gone')
+
+    await store.updateSettings({ startupScan: false })
+
+    expect(store.error).toBe('settings gone')
+    expect(store.loading).toBe(false)
+  })
 })
 
 // ── clear 系列 ─────────────────────────────────────────────────────
