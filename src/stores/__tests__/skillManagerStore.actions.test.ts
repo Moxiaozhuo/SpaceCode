@@ -996,6 +996,8 @@ describe('后台刷新（经由 init / refresh 触发）', () => {
     await flushBackground()
 
     expect(store.initialized).toBe(true)
+    expect(store.error).toBeNull()
+    expect(store.loading).toBe(false)
     expect(sm.bootstrap).toHaveBeenCalledTimes(1)
     expect(sm.getOverview).toHaveBeenCalledTimes(1)
     expect(sm.refreshAgentVersions).toHaveBeenCalledTimes(1)
