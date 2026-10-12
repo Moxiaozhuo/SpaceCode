@@ -12,15 +12,16 @@ import { join } from 'path'
 
 /**
  * The local-filesystem surface of the H5 server (`/api/fs/*`) — the part a
- * paired phone uses to browse a project, and the part that reads whatever the
- * request names.
+ * paired phone uses to browse a project, gated to the roots the desktop
+ * registered for it.
  *
  * These cases run against a *real* temp tree rather than a stubbed `fs`, so the
  * failure modes are the OS's own (ENOENT, ENOTDIR, dangling links, non-UTF-8
  * bytes) instead of a mock's opinion of them.
  *
- * The routes always answer 200 and put the failure in the payload
- * (`[]` / `null`), which the assertions below treat as the contract.
+ * A read that is allowed but cannot be answered returns 200 with the failure in
+ * the payload (`[]` / `null`); a read the guard refuses answers 403 before the
+ * filesystem is touched.
  */
 
 vi.mock('electron', async () => {
@@ -128,6 +129,9 @@ describe('H5Server filesystem routes', () => {
     writeFileSync(pathIn('logo.png'), Buffer.from([0x89, 0x50, 0xff, 0xfe, 0x00, 0x41, 0x42]))
 
     server = new H5Server(auth)
+    // The desktop process is the only thing that may widen what a remote can
+    // read; tests register the temp tree the way `h5:setMirrorSession` does.
+    server.registerProjectRoot(root)
     port = (await server.start(0)).port
   })
 
@@ -238,11 +242,19 @@ describe('H5Server filesystem routes', () => {
       expect(await payload('/api/fs/read-file', { path: pathIn('broken-link.txt') })).toBeNull()
     })
 
-    it('reads any absolute path the request names — the token is the only gate', async () => {
+    it('refuses an absolute path outside the registered roots', async () => {
       const outside = pathIn('..', 'spacecode-outside-read.txt')
       writeFileSync(outside, 'outside the browsed project', 'utf-8')
 
-      expect(await payload('/api/fs/read-file', { path: outside })).toBe('outside the browsed project')
+      const res = await fsCall('/api/fs/read-file', { path: outside })
+
+      expect(res.status).toBe(403)
+      expect(jsonOf(res)).toEqual({ error: 'Path is outside the registered project roots' })
+      expect(res.body).not.toContain('outside the browsed project')
+      expect(loggerStub.warn).toHaveBeenCalledWith(
+        'H5Server',
+        expect.stringContaining('reason=outside-roots'),
+      )
 
       rmSync(outside, { force: true })
     })
@@ -446,6 +458,106 @@ describe('H5Server filesystem routes', () => {
       })) as SearchEntry[]
 
       expect(entries).toEqual([])
+    })
+  })
+
+  describe('the registered-roots gate', () => {
+    it('fails closed while the desktop has not registered any root', async () => {
+      const bare = new H5Server(auth)
+      const barePort = (await bare.start(0)).port
+
+      try {
+        const res = await rawRequest({
+          port: barePort,
+          path: '/api/fs/read-file',
+          method: 'POST',
+          body: { path: pathIn('alpha.txt') },
+          token: TEST_TOKEN,
+        })
+
+        expect(res.status).toBe(403)
+        expect(jsonOf(res)).toEqual({ error: 'Path is outside the registered project roots' })
+        expect(loggerStub.warn).toHaveBeenCalledWith('H5Server', expect.stringContaining('reason=no-roots'))
+      } finally {
+        bare.stop()
+      }
+    })
+
+    it('refuses every fs route for a path above the root', async () => {
+      const above = join(root, '..')
+
+      for (const route of [
+        '/api/fs/read-dir',
+        '/api/fs/read-file',
+        '/api/fs/read-file-base64',
+        '/api/fs/stat',
+        '/api/fs/search-files',
+      ]) {
+        const res = await fsCall(route, { path: above, query: 'x' })
+
+        expect(`${route} -> ${res.status}`).toBe(`${route} -> 403`)
+      }
+    })
+
+    it('refuses a symlink whose target leaves the root', async () => {
+      const outside = pathIn('..', 'spacecode-link-target.txt')
+      writeFileSync(outside, 'secret outside the root', 'utf-8')
+      symlinkSync(outside, pathIn('sneaky.txt'))
+
+      const res = await fsCall('/api/fs/read-file', { path: pathIn('sneaky.txt') })
+
+      expect(res.status).toBe(403)
+      expect(res.body).not.toContain('secret outside the root')
+
+      rmSync(outside, { force: true })
+    })
+
+    it('404s an unknown /api/fs sub-route', async () => {
+      const res = await fsCall('/api/fs/nope', { path: root })
+
+      expect(res.status).toBe(404)
+      expect(jsonOf(res)).toEqual({ error: 'Unknown API: /api/fs/nope' })
+    })
+
+    it('refuses a text read above the size ceiling instead of loading it', async () => {
+      const huge = pathIn('huge.txt')
+      writeFileSync(huge, Buffer.alloc(2 * 1024 * 1024 + 1, 0x61))
+
+      const res = await fsCall('/api/fs/read-file', { path: huge })
+
+      expect(res.status).toBe(200)
+      expect(jsonOf(res)).toBeNull()
+      expect(loggerStub.warn).toHaveBeenCalledWith('H5Server', expect.stringContaining('oversized'))
+
+      rmSync(huge, { force: true })
+    })
+
+    it('refuses a base64 read above the binary ceiling', async () => {
+      const huge = pathIn('huge.bin')
+      writeFileSync(huge, Buffer.alloc(8 * 1024 * 1024 + 1, 0x41))
+
+      const res = await fsCall('/api/fs/read-file-base64', { path: huge })
+
+      expect(res.status).toBe(200)
+      expect(jsonOf(res)).toBeNull()
+
+      rmSync(huge, { force: true })
+    })
+
+    it('clamps a caller-supplied maxResults to the server ceiling', async () => {
+      const many = pathIn('many')
+      mkdirSync(many, { recursive: true })
+      for (let i = 0; i < 400; i += 1) writeFileSync(join(many, `f${i}.txt`), 'x', 'utf-8')
+
+      const entries = (await payload('/api/fs/search-files', {
+        path: root,
+        query: 'f',
+        options: { maxResults: 100_000 },
+      })) as SearchEntry[]
+
+      expect(entries).toHaveLength(200)
+
+      rmSync(many, { recursive: true, force: true })
     })
   })
 

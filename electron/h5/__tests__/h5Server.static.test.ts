@@ -222,19 +222,21 @@ describe('H5Server static surface', () => {
       expect(JSON.parse(res.body)).toMatchObject({ status: 'ok' })
     })
 
-    it('answers the CORS preflight with 204 and the three allow headers', async () => {
+    it('answers the CORS preflight with 204 but grants no cross-origin read', async () => {
       const res = await rawRequest({ port, path: '/api/session/status', method: 'OPTIONS' })
 
       expect(res.status).toBe(204)
-      expect(res.headers['access-control-allow-origin']).toBe('*')
-      expect(res.headers['access-control-allow-methods']).toBe('GET, POST, OPTIONS')
-      expect(res.headers['access-control-allow-headers']).toContain('Authorization')
+      // The H5 client is same-origin by construction (its baseUrl comes from
+      // window.location), so a wildcard would only widen a leaked token's reach.
+      expect(res.headers['access-control-allow-origin']).toBeUndefined()
+      expect(res.headers['access-control-allow-methods']).toBeUndefined()
     })
 
-    it('keeps the CORS headers on plain static responses', async () => {
+    it('serves statics without an Access-Control-Allow-Origin', async () => {
       const res = await rawRequest({ port, path: '/' })
 
-      expect(res.headers['access-control-allow-origin']).toBe('*')
+      expect(res.status).toBe(200)
+      expect(res.headers['access-control-allow-origin']).toBeUndefined()
     })
   })
 

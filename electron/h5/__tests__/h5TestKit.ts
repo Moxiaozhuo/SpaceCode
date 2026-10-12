@@ -124,6 +124,25 @@ function unusedFetch(): FetchStub {
   })
 }
 
+/** A routable address, so the SSRF guard's resolution step is not a real lookup. */
+export const PUBLIC_IP = '93.184.216.34'
+
+/**
+ * Backs `dns.promises.lookup` for `/api/http/fetch`. The proxy resolves the
+ * hostname before fetching, so a test that names a public host must not depend
+ * on the machine having DNS.
+ */
+export const dnsStub = {
+  lookup: vi.fn(async (_hostname: string, _opts: unknown): Promise<Array<{ address: string }>> => [
+    { address: PUBLIC_IP },
+  ]),
+}
+
+export function resetDnsStub(): void {
+  dnsStub.lookup.mockReset()
+  dnsStub.lookup.mockResolvedValue([{ address: PUBLIC_IP }])
+}
+
 export function defaultSettings(): H5AccessSettings {
   return {
     enabled: true,

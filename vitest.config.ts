@@ -84,7 +84,7 @@ export default defineConfig({
         'src/services/**': { statements: 37 }, // 37.6% (teamTranscriptService 子代理转录归一化与轮询)
         'electron/cron/**': { statements: 70 }, // 72.7%
         'electron/git/**': { statements: 85 }, // 91.9% (exec 传输/status/分支/argv/diff 合成/worker 降级)
-        'electron/h5/**': { statements: 55 }, // 63.3% (h5Server 从 0% 起：静态/穿越/API 门/ws/fs)
+        'electron/h5/**': { statements: 64 }, // 67.3% (h5Server 从 0% 起：静态/API 门/ws/fs + fs 可信根闸门 + 凭据剥离 + SSRF 解析校验)
         'electron/infra/**': { statements: 45 }, // 52.4% (proxyManager 配置映射/生命周期/脚本/健康阶梯)
         'electron/engine/**': { statements: 48 }, // 52.0% (cliDetector 安装器 + PiSessionProcess 流协议)
         'electron/skills/**': { statements: 55 }, // 60.3% (市场/扫描/本地库三片，skillsService 90.1%)

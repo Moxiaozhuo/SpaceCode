@@ -40,10 +40,18 @@ vi.mock('../../session/sessionHistoryManager', async () => {
   return { SessionHistoryManager: historyStub }
 })
 
+// The proxy resolves hostnames before fetching; stubbing the resolver keeps the
+// suite off real DNS.
+vi.mock('dns', async () => {
+  const { dnsStub } = await import('./h5TestKit')
+  return { promises: dnsStub }
+})
+
 import { H5Server } from '../h5Server'
 import {
   TEST_TOKEN,
   auth,
+  dnsStub,
   engineFactoryStub,
   gatewayStub,
   historyStub,
@@ -51,6 +59,7 @@ import {
   loggerStub,
   makeWindow,
   rawRequest,
+  resetDnsStub,
   resetEngineFactoryStub,
   resetGatewayStub,
   resetHistoryStub,
@@ -90,6 +99,7 @@ describe('H5Server API surface', () => {
     resetGatewayStub()
     resetHistoryStub()
     resetEngineFactoryStub()
+    resetDnsStub()
     server = new H5Server(auth)
     port = (await server.start(0)).port
   })
@@ -128,11 +138,14 @@ describe('H5Server API surface', () => {
       expect(auth.validateToken).toHaveBeenCalledWith(TEST_TOKEN)
     })
 
-    it('accepts the token from the query string', async () => {
+    it('refuses the token when it arrives in the query string', async () => {
+      // Query strings end up in browser history, proxy and server logs, and
+      // Referer headers. Only /ws may still take a token that way.
       const res = await call('/api/sessions/active', undefined, { auth: 'query' })
 
-      expect(res.status).toBe(200)
-      expect(auth.validateToken).toHaveBeenCalledWith(TEST_TOKEN)
+      expect(res.status).toBe(401)
+      expect(jsonOf(res)).toEqual({ error: 'Unauthorized' })
+      expect(auth.validateToken).toHaveBeenCalledWith(null)
     })
 
     it('validates the token before reading the request body', async () => {
@@ -161,11 +174,12 @@ describe('H5Server API surface', () => {
     })
 
     it('does not parse a body for GET, so query-string reads stay possible', async () => {
-      const res = await call('/api/sessions/list', undefined, { auth: 'query' })
+      historyStub.listProjectSessions.mockResolvedValueOnce([])
 
-      // no projectPath in the query either way
-      expect(res.status).toBe(400)
-      expect(jsonOf(res)).toEqual({ error: 'projectPath required' })
+      const res = await call('/api/sessions/list?projectPath=/work/p')
+
+      expect(res.status).toBe(200)
+      expect(historyStub.listProjectSessions).toHaveBeenCalledWith('/work/p')
     })
   })
 
@@ -721,24 +735,52 @@ describe('H5Server API surface', () => {
       expect(jsonOf(res)).toMatchObject({ guiSettings: null })
     })
 
-    it('returns the settings file verbatim', async () => {
+    function writeSettings(content: string): void {
       mkdirSync(join(home, '.claude'), { recursive: true })
+      writeFileSync(join(home, '.claude', 'gui-settings.json'), content, 'utf-8')
+    }
+
+    it('returns the settings file verbatim', async () => {
       const raw = JSON.stringify({ model: 'sonnet', thinkingEnabled: true })
-      writeFileSync(join(home, '.claude', 'gui-settings.json'), raw, 'utf-8')
+      writeSettings(raw)
 
       const res = await call('/api/desktop-config')
 
       expect(jsonOf(res)).toMatchObject({ guiSettings: raw })
     })
 
-    it('hands a corrupt settings file through untouched instead of failing the route', async () => {
-      mkdirSync(join(home, '.claude'), { recursive: true })
-      writeFileSync(join(home, '.claude', 'gui-settings.json'), '{oops', 'utf-8')
+    it('strips provider credentials before the settings leave the desktop', async () => {
+      writeSettings(
+        JSON.stringify({
+          authMethod: 'anthropic_compatible',
+          anthropicConfig: { baseUrl: 'https://api.example.com', apiKey: 'sk-ant-secret', sonnetModel: 'claude-sonnet-4' },
+          openaiConfig: { apiKey: 'sk-open-secret', baseUrl: 'https://o.example.com' },
+          pet: { nickname: 'Bo' },
+        }),
+      )
 
       const res = await call('/api/desktop-config')
 
+      const guiSettings = (jsonOf(res) as { guiSettings: string }).guiSettings
+      expect(guiSettings).not.toContain('sk-ant-secret')
+      expect(guiSettings).not.toContain('sk-open-secret')
+      expect(JSON.parse(guiSettings)).toEqual({
+        authMethod: 'anthropic_compatible',
+        anthropicConfig: { baseUrl: 'https://api.example.com', sonnetModel: 'claude-sonnet-4' },
+        openaiConfig: { baseUrl: 'https://o.example.com' },
+        pet: { nickname: 'Bo' },
+      })
+    })
+
+    it('answers null for a settings document it cannot inspect', async () => {
+      writeSettings('{oops')
+
+      const res = await call('/api/desktop-config')
+
+      // A document that will not parse cannot be proven credential-free, so it
+      // is not forwarded.
       expect(res.status).toBe(200)
-      expect(jsonOf(res)).toMatchObject({ guiSettings: '{oops' })
+      expect(jsonOf(res)).toMatchObject({ guiSettings: null })
     })
 
     it('answers null settings when the home path cannot be read', async () => {
@@ -790,6 +832,70 @@ describe('H5Server API surface', () => {
       expect(jsonOf(res)).toEqual({ ok: false, status: 0, error: 'URL is not allowed' })
       expect(runtime.fetchImpl).not.toHaveBeenCalled()
       expect(loggerStub.warn).toHaveBeenCalledWith('H5Server', expect.stringContaining('blocked internal/private URL'))
+    })
+
+    it('refuses a public hostname that resolves to an internal address', async () => {
+      // The literal hostname says "public"; only the answer does not.
+      dnsStub.lookup.mockResolvedValueOnce([{ address: '169.254.169.254' }])
+
+      const res = await fetchJson({ url: 'https://metadata.example.com/latest' })
+
+      expect(jsonOf(res)).toEqual({ ok: false, status: 0, error: 'URL is not allowed' })
+      expect(runtime.fetchImpl).not.toHaveBeenCalled()
+    })
+
+    it('refuses a hostname that resolves to nothing', async () => {
+      dnsStub.lookup.mockResolvedValueOnce([])
+
+      const res = await fetchJson({ url: 'https://gone.example.com/' })
+
+      expect(jsonOf(res)).toEqual({ ok: false, status: 0, error: 'URL is not allowed' })
+      expect(runtime.fetchImpl).not.toHaveBeenCalled()
+    })
+
+    it('does not let the resolver run when the host is already an IP literal', async () => {
+      runtime.fetchImpl.mockResolvedValueOnce({ ok: true, status: 200, text: async () => 'fine' })
+
+      const res = await fetchJson({ url: 'https://93.184.216.34/' })
+
+      expect(jsonOf(res)).toMatchObject({ ok: true, status: 200 })
+      expect(dnsStub.lookup).not.toHaveBeenCalled()
+    })
+
+    it('refuses a redirect instead of following it to another address', async () => {
+      runtime.fetchImpl.mockResolvedValueOnce({
+        type: 'opaqueredirect',
+        status: 0,
+        ok: false,
+        text: async () => '',
+      })
+
+      const res = await fetchJson({ url: 'https://hop.example.com/' })
+
+      expect(jsonOf(res)).toEqual({ ok: false, status: 0, error: 'Redirects are not allowed' })
+      expect(runtime.fetchImpl).toHaveBeenCalledWith(
+        'https://hop.example.com/',
+        expect.objectContaining({ redirect: 'manual' }),
+      )
+    })
+
+    it('refuses a visible 3xx the upstream answers with', async () => {
+      runtime.fetchImpl.mockResolvedValueOnce({ status: 302, ok: false, text: async () => '' })
+
+      const res = await fetchJson({ url: 'https://hop.example.com/away' })
+
+      expect(jsonOf(res)).toEqual({ ok: false, status: 0, error: 'Redirects are not allowed' })
+      expect(loggerStub.warn).toHaveBeenCalledWith('H5Server', expect.stringContaining('blocked redirect'))
+    })
+
+    it('names the redirect refusal when Electron throws instead of answering 3xx', async () => {
+      // redirect:'manual' measured on Electron 43: a redirect rejects with
+      // "Redirect was cancelled" rather than surfacing the 3xx response.
+      runtime.fetchImpl.mockRejectedValueOnce(new Error('Redirect was cancelled'))
+
+      const res = await fetchJson({ url: 'https://hop.example.com/' })
+
+      expect(jsonOf(res)).toEqual({ ok: false, status: 0, error: 'Redirects are not allowed' })
     })
 
     it('proxies a public URL and returns the body text', async () => {
