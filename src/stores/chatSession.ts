@@ -481,6 +481,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
   const isLoadingTurnCards = ref(false)
   const turnCardsError = ref<string | null>(null)
   const rewindingTurnId = ref<string | null>(null)
+  let turnCheckpointLoadGeneration = 0
 
   // ── Rewind 状态（UI 状态机 module，从 store 中提取）──
   const { rewindState, patchRewindState, resetRewindState } = useRewindDialog()
@@ -1565,14 +1566,20 @@ export const useChatSessionStore = defineStore('chatSession', () => {
   async function loadTurnCheckpoints(sessionId: string, projectPathOverride?: string, force?: boolean) {
     if (!sessionId || (isLoadingTurnCards.value && !force)) return
 
+    const loadGeneration = ++turnCheckpointLoadGeneration
     isLoadingTurnCards.value = true
     turnCardsError.value = null
+
+    const isCurrentLoad = () =>
+      loadGeneration === turnCheckpointLoadGeneration &&
+      (!currentSessionId.value || currentSessionId.value === sessionId)
 
     try {
       const projectPath = projectPathOverride
         || sessions.value.find(s => s.id === sessionId)?.workingDirectory
         || workingDirectory.value
       const result = await api.session.getTurnCheckpoints(sessionId, projectPath)
+      if (!isCurrentLoad()) return
       if (result.ok) {
         turnCheckpoints.value = result.checkpoints
       } else {
@@ -1580,10 +1587,13 @@ export const useChatSessionStore = defineStore('chatSession', () => {
         turnCheckpoints.value = []
       }
     } catch (err) {
+      if (!isCurrentLoad()) return
       turnCardsError.value = err instanceof Error ? err.message : 'Unknown error'
       turnCheckpoints.value = []
     } finally {
-      isLoadingTurnCards.value = false
+      if (loadGeneration === turnCheckpointLoadGeneration) {
+        isLoadingTurnCards.value = false
+      }
     }
   }
 
@@ -1613,6 +1623,8 @@ export const useChatSessionStore = defineStore('chatSession', () => {
   }
 
   function clearTurnCheckpoints() {
+    turnCheckpointLoadGeneration++
+    isLoadingTurnCards.value = false
     turnCheckpoints.value = []
     turnCardsError.value = null
   }
