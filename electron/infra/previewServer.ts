@@ -19,46 +19,12 @@
  */
 
 import { createServer, type IncomingMessage, type ServerResponse, type Server } from 'http'
-import { readFileSync, existsSync, statSync, realpathSync } from 'fs'
-import { join, extname, resolve, dirname, relative, sep, parse } from 'path'
+import { readFileSync, existsSync, statSync } from 'fs'
+import { join, extname, resolve, dirname, relative, sep } from 'path'
 import { randomBytes } from 'crypto'
 import { ipcMain } from 'electron'
 import { info, warn, error, debug } from './logger'
-
-const IS_WIN = process.platform === 'win32'
-
-/**
- * realpath when the path exists (so a symlink is judged as its target), the
- * resolved absolute path when it does not (so a not-yet-written file under an
- * allowed root keeps the "read returns nothing" behaviour instead of throwing).
- */
-function canonicalize(candidate: string): string {
-  try {
-    return realpathSync(candidate)
-  } catch {
-    return resolve(candidate)
-  }
-}
-
-/** Windows 路径大小写不敏感，末尾分隔符也不影响归属，比较前先归一。 */
-function compareForm(path: string): string {
-  const stripped = path.replace(/[\\/]+$/, '')
-  const value = stripped === '' ? path : stripped
-  return IS_WIN ? value.toLowerCase() : value
-}
-
-/** 归一（大小写 + 末尾分隔符）后判归属；调用方不必记得自己先归一。 */
-function inside(child: string, root: string): boolean {
-  const normalizedRoot = compareForm(root)
-  const normalizedChild = compareForm(child)
-  const prefix = normalizedRoot === '' ? root : normalizedRoot + sep
-  return normalizedChild === normalizedRoot || normalizedChild.startsWith(prefix)
-}
-
-/** `C:\` 与 `/` 这类文件系统根：登记它们等于放开整个盘，必须拒绝。 */
-function isFileSystemRoot(absPath: string): boolean {
-  return compareForm(parse(absPath).root) === compareForm(absPath)
-}
+import { canonicalize, compareForm, inside, isFileSystemRoot } from './pathBoundary'
 
 /** 非法百分号编码不当作错误，按字面段处理 — 后续边界检查才是权威闸门。 */
 function decodeSegment(segment: string): string {

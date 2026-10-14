@@ -22,15 +22,22 @@
       </div>
     </div>
     <div v-if="activeTabPath" class="export-bar">
-      <button @click="exportFile('html')">{{ t('design.export.html') }}</button>
-      <button @click="exportFile('zip')">{{ t('design.export.zip') }}</button>
-      <button @click="exportFile('pdf')">{{ t('design.export.pdf') }}</button>
+      <div class="export-actions">
+        <button
+          v-for="fmt in exportFormats"
+          :key="fmt"
+          :disabled="!activeIsHtml || exporting"
+          :title="activeIsHtml ? '' : t('design.export.htmlOnly')"
+          @click="exportFile(fmt)"
+        >{{ t(`design.export.${fmt}`) }}</button>
+      </div>
+      <p v-if="exportStatus" class="export-status" :class="exportStatus.kind">{{ exportStatus.text }}</p>
     </div>
   </div>
 </template>
 
 <script setup lang="ts">
-import { ref, watch, onMounted, onUnmounted } from 'vue'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { storeToRefs } from 'pinia'
 import { FileText, FileCode } from 'lucide-vue-next'
@@ -50,6 +57,11 @@ const previewResourceUrl = ref<string | null>(null)
 /** 递增即强制重新导航，用于 HTML 之外的 CSS/JS 变更后重取兄弟资源 */
 const previewReloadToken = ref(0)
 
+type ExportFormat = 'html' | 'zip' | 'pdf'
+const exportFormats: ExportFormat[] = ['html', 'zip', 'pdf']
+const exporting = ref(false)
+const exportStatus = ref<{ kind: 'working' | 'success' | 'error'; text: string } | null>(null)
+
 /** 从完整路径中提取文件名（兼容 Windows 反斜杠与 POSIX 正斜杠） */
 function basename(filepath: string): string {
   return filepath.split(/[\\/]/).pop() || filepath
@@ -61,7 +73,11 @@ function isHtmlFile(filepath: string): boolean {
   return ext === 'html' || ext === 'htm'
 }
 
+/** 只有 HTML 产物有可导出的形态；CSS/JS tab 上导出条整体禁用 */
+const activeIsHtml = computed(() => !!activeTabPath.value && isHtmlFile(activeTabPath.value))
+
 watch(activeTabPath, async (p) => {
+  exportStatus.value = null
   if (!p) {
     previewResourceUrl.value = null
     previewHtml.value = ''
@@ -146,9 +162,38 @@ async function refresh() {
   }
 }
 
-async function exportFile(format: 'html' | 'zip' | 'pdf') {
-  if (!activeTabPath.value) return
-  api.design.exportArtifact({ filePath: activeTabPath.value, format })
+async function exportFile(format: ExportFormat) {
+  const filePath = activeTabPath.value
+  if (!filePath || !activeIsHtml.value || exporting.value) return
+
+  exporting.value = true
+  exportStatus.value = { kind: 'working', text: t('design.export.working') }
+  try {
+    const result = await api.design.exportArtifact({
+      filePath,
+      format,
+      workspaceRoot: designWorkspace.value || undefined,
+    })
+    if (result.ok) {
+      // html 打开的是产物所在目录，zip/pdf 是新生成的文件
+      exportStatus.value = {
+        kind: 'success',
+        text: format === 'html'
+          ? t('design.export.opened', { path: result.path })
+          : t('design.export.exported', { path: result.path }),
+      }
+    } else {
+      // api 层在拿不到 preload 时回 'unsupported:' 哨兵：细节不外露，只说未支持
+      exportStatus.value = {
+        kind: 'error',
+        text: result.error.startsWith('unsupported:')
+          ? t('design.export.unavailable')
+          : t('design.export.failed', { error: result.error }),
+      }
+    }
+  } finally {
+    exporting.value = false
+  }
 }
 </script>
 
@@ -161,5 +206,7 @@ async function exportFile(format: 'html' | 'zip' | 'pdf') {
 .artifact-list { border-top: 1px solid var(--surface-border); padding: 8px; max-height: 200px; overflow-y: auto; @include scrollbar-overlay; background: var(--bg-secondary); }
 .al-title { font-size: 11px; color: var(--text-muted); text-transform: uppercase; margin-bottom: 6px; }
 .al-item { display: flex; align-items: center; gap: 6px; padding: 4px 8px; border-radius: var(--radius-sm); cursor: pointer; font-size: 12px; &:hover { background: var(--surface-hover); } &.active { background: var(--accent-primary-glow); } }
-.export-bar { display: flex; gap: 6px; padding: 8px; border-top: 1px solid var(--surface-border); button { flex: 1; background: var(--bg-secondary); border: 1px solid var(--surface-border); border-radius: var(--radius-sm); padding: 6px; font-size: 11px; cursor: pointer; } }
+.export-bar { display: flex; flex-direction: column; gap: 6px; padding: 8px; border-top: 1px solid var(--surface-border); }
+.export-actions { display: flex; gap: 6px; button { flex: 1; background: var(--bg-secondary); border: 1px solid var(--surface-border); border-radius: var(--radius-sm); padding: 6px; font-size: 11px; cursor: pointer; &:disabled { opacity: .45; cursor: not-allowed; } } }
+.export-status { font-size: 11px; line-height: 1.4; color: var(--text-muted); word-break: break-all; &.success { color: var(--success); } &.error { color: var(--error); } }
 </style>
