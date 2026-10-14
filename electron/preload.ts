@@ -580,8 +580,8 @@ contextBridge.exposeInMainWorld('electronAPI', {
 
   // Preview Server API — 获取本地 HTTP 预览 URL（替代 file:// 协议）
   preview: {
-    getUrl: (filePath: string): Promise<string | null> =>
-      ipcRenderer.invoke('preview:getUrl', filePath),
+    getUrl: (filePath: string, workspaceRoot?: string): Promise<string | null> =>
+      ipcRenderer.invoke('preview:getUrl', filePath, workspaceRoot),
   },
 
   // Design API

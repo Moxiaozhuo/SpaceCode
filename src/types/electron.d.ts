@@ -511,7 +511,7 @@ export interface ElectronAPI {
   showNotification: (options: { title: string; message: string }) => void
 
   preview: {
-    getUrl: (filePath: string) => Promise<string | null>
+    getUrl: (filePath: string, workspaceRoot?: string) => Promise<string | null>
   }
 
   design: {

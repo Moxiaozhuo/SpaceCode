@@ -449,13 +449,14 @@ export const useAppStore = defineStore('app', () => {
   const TERMINAL_DOCK_MIN = 80
   const TERMINAL_DOCK_MAX = 500
 
-  function getDefaultTerminalCwd(): string | undefined {
+  /** 当前生效的工作目录：会话工作目录 → 项目根 → work 模式产物区 */
+  function getEffectiveWorkspaceRoot(): string | undefined {
     const sessionStore = useChatSessionStore()
     return sessionStore.workingDirectory || projectRoot.value || workWorkspace.value || undefined
   }
 
   function createTerminalTab(options?: CreateTerminalOptions): string | null {
-    const cwd = options?.cwd || getDefaultTerminalCwd()
+    const cwd = options?.cwd || getEffectiveWorkspaceRoot()
     const terminalStore = useTerminalStore()
     return terminalStore.createTab({
       ...options,
@@ -872,7 +873,8 @@ export const useAppStore = defineStore('app', () => {
   /** 将本地文件路径转为预览 URL 并在内置浏览器打开（用于预览 .html 等产物） */
   async function openFileInWebview(filePath: string) {
     // 优先使用本地 HTTP 预览服务器（解决 file:// 协议下 ES Module / CORS 问题）
-    const previewUrl = await api.preview.getUrl(filePath)
+    // 带上当前工作目录，预览服务才会把可读范围登记到该工作区，页面内的相对引用不断链
+    const previewUrl = await api.preview.getUrl(filePath, getEffectiveWorkspaceRoot())
     if (previewUrl) {
       openWebview(previewUrl)
       return
