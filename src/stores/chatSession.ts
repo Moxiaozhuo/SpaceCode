@@ -15,6 +15,7 @@ import { generateSessionTitle } from '@/services/aiSessionTitle'
 import { createUuid } from '@/utils/uuid'
 import { buildMessagesFromHistory } from '@/utils/sessionRestore'
 import { normalizeAbsolutePath } from '@/utils/normalizePath'
+import { buildStartupFingerprint, diffStartupConfig } from '@/utils/sessionStartup'
 import {
   loadSessionsFromStorage,
   saveSessionsToStorage,
@@ -830,8 +831,25 @@ export const useChatSessionStore = defineStore('chatSession', () => {
       // they cannot continue using an engine started with a different provider.
       const providerChanged = !session.provider || session.provider !== configuredConnection.provider
       const baseUrlChanged = (session.baseUrl || '') !== (configuredConnection.baseUrl || '')
-      if (engineChanged || engineSourceChanged || providerChanged || baseUrlChanged) {
-        logger.info('ChatStore', `initClaudeCodeSession: engine changed (${currentEngine}/${currentEngineSource} → ${desiredEngine}/${desiredEngineSource}), restarting | id=${sessionId.slice(0, 8)}`)
+      // systemPrompt / agent 只在 startSession 时下发、凭据只在 spawn 时注入环境变量，
+      // 运行中的进程收不到更新，只能重启（带 resume 恢复历史）。代理模式例外：引擎侧
+      // 只拿占位 Key，真实 Key 属于本地代理，保存设置时由 reconcileProxyWithSettings
+      // 对齐；代理不可用的兜底回落到真实 Key，那条路径不在本票范围（见代理不自愈缺陷）。
+      const desiredStartup = {
+        systemPrompt: overrides?.systemPrompt,
+        agent: overrides?.agent,
+        apiKey: configuredConnection.apiKey,
+        usesProxy: configuredConnection.provider !== 'anthropic',
+      }
+      const restartReasons = [
+        engineChanged ? `engine(${currentEngine}→${desiredEngine})` : '',
+        engineSourceChanged ? `engineSource(${currentEngineSource}→${desiredEngineSource})` : '',
+        providerChanged ? 'provider' : '',
+        baseUrlChanged ? 'baseUrl' : '',
+        ...diffStartupConfig(session.startupFingerprint, desiredStartup),
+      ].filter(Boolean)
+      if (restartReasons.length > 0) {
+        logger.info('ChatStore', `initClaudeCodeSession: startup config changed (${restartReasons.join(', ')}), restarting | id=${sessionId.slice(0, 8)}`)
         const resumeId = (status.engineSessionId as string) || session.engineSessionId
         try {
           await claudeCode.stop(sessionId)
@@ -850,6 +868,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     try {
       const config = settingsStore.config
       const cwd = overrides?.cwd || session.workingDirectory || currentProjectRoot.value || await api.getCwd() || '/'
+      const appliedAgent = overrides?.agent || currentAgent.value || undefined
 
       // ★ 模型别名解析：将实际模型名映射为 claude-code 的 haiku/sonnet/opus 别名。
       // 引擎的 --model 参数和 set_model control_request 都通过别名解析机制
@@ -880,7 +899,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
       const { usePermissionPolicyStore } = await import('./permissionPolicy')
       const policyStore = usePermissionPolicyStore()
 
-      logger.info('ChatStore', `initClaudeCodeSession: starting session | id=${sessionId.slice(0, 8)} | engine=${desiredEngine} | cwd=${cwd} | provider=${config.provider} | model=${effectiveModel} | baseUrl=${config.baseUrl || '(empty)'} | apiKey=${config.apiKey ? '***set' : '(empty)'} | agent=${currentAgent.value || '(none)'}`)
+      logger.info('ChatStore', `initClaudeCodeSession: starting session | id=${sessionId.slice(0, 8)} | engine=${desiredEngine} | cwd=${cwd} | provider=${config.provider} | model=${effectiveModel} | baseUrl=${config.baseUrl || '(empty)'} | apiKey=${config.apiKey ? '***set' : '(empty)'} | agent=${appliedAgent || '(none)'}`)
       traceEvent({
         sessionId,
         actor: 'system',
@@ -893,7 +912,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
           provider: config.provider,
           model: effectiveModel,
           baseUrl: config.baseUrl || '',
-          agent: currentAgent.value || '',
+          agent: appliedAgent || '',
         },
       })
 
@@ -905,7 +924,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
         model: effectiveModel,
         effortLevel: config.effortLevel,
         permissionMode: policyStore.currentPermissionMode,
-        agent: overrides?.agent || currentAgent.value || undefined,
+        agent: appliedAgent,
         thinkingEnabled: settingsStore.thinkingEnabled,
         engineType: desiredEngine,
         engineSource: settingsStore.engineSource,
@@ -923,6 +942,12 @@ export const useChatSessionStore = defineStore('chatSession', () => {
       session.engineSource = settingsStore.engineSource
       session.provider = config.provider
       session.baseUrl = config.baseUrl || ''
+      session.startupFingerprint = buildStartupFingerprint({
+        systemPrompt: overrides?.systemPrompt,
+        agent: appliedAgent,
+        apiKey: config.apiKey,
+        usesProxy: config.provider !== 'anthropic',
+      })
       // 无会话时暂存的模型选择在此落地为新会话的默认模型，
       // 后续 init 不再依赖暂存值；跨重启持久化的 lastSelectedModel 同理
       if (!session.model) {
