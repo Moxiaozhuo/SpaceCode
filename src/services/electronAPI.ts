@@ -265,6 +265,13 @@ export interface GitCommitFileStat {
   [key: string]: unknown
 }
 
+export interface GitDiscardResult {
+  success: boolean
+  /** Requested paths git refused to discard; the rest of the request went through. */
+  failedPaths: string[]
+  error?: string
+}
+
 export interface CronAttachment {
   id: string
   name: string
