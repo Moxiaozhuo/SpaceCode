@@ -216,7 +216,10 @@ describe('chatSession loadTurnCheckpoints', () => {
 })
 
 describe('chatSession turnChangeCards filtering', () => {
-  async function buildStore(messages: Message[], cps: SessionTurnCheckpoint[]) {
+  async function buildStore(
+    messages: Message[],
+    cps: SessionTurnCheckpoint[],
+  ) {
     seedCurrentSession(messages)
     // 持久 mock：selectSession 内部会 fire-and-forget 触发一次 loadTurnCheckpoints，
     // 用 mockResolvedValue 保证两次加载都落到同一份 checkpoints，不与之竞态。
@@ -277,6 +280,22 @@ describe('chatSession turnChangeCards filtering', () => {
     )
 
     expect(store.turnChangeCards.map(c => c.targetUserMessageId)).toEqual(['u1'])
+  })
+
+  it('hides the latest checkpoint while the current session turn is still active', async () => {
+    const store = await buildStore(
+      [
+        user('u1', 'first', 1),
+        assistant('a1', 'completed response', 2),
+        user('u2', 'second', 3),
+        assistant('a2', 'partial response', 4),
+      ],
+      [checkpoint('u1', 0, ['completed.ts']), checkpoint('u2', 1, ['in-progress.ts'])],
+    )
+
+    store.getSession('sess-rw')!.processStatus = 'active'
+
+    expect(store.turnChangeCards.map(card => card.targetUserMessageId)).toEqual(['u1'])
   })
 })
 

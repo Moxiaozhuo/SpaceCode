@@ -1834,6 +1834,9 @@ export const useChatSessionStore = defineStore('chatSession', () => {
 
     const latestIndex = turnCheckpoints.value.length - 1
     const messages = currentMessages.value
+    const currentSessionState = sessions.value.find(session => session.id === currentSessionId.value)
+    const currentTurnActive = currentSessionState?.processStatus === 'starting'
+      || currentSessionState?.processStatus === 'active'
 
     return turnCheckpoints.value.map((checkpoint, index) => ({
       checkpoint,
@@ -1856,6 +1859,16 @@ export const useChatSessionStore = defineStore('chatSession', () => {
 
       // 找到该 user 消息之后的第一条 assistant 消息
       const userMsgIndex = messages.indexOf(userMsg)
+
+      // 当前轮次仍在运行时，最新用户消息后的 assistant 可能只有部分流式内容；
+      // 这类消息不能让检查点卡片提前出现。更早轮次的卡片仍然保留。
+      if (
+        currentTurnActive &&
+        !messages.slice(userMsgIndex + 1).some(message => message.role === 'user' && message.timestamp > 0)
+      ) {
+        return false
+      }
+
       const assistantMsg = messages.slice(userMsgIndex + 1).find(m => m.role === 'assistant')
 
       // 如果没有 assistant 消息，说明轮次还没开始，不显示
