@@ -6,6 +6,7 @@ import { useTerminalStore, type CreateTerminalOptions } from './terminal'
 import { useSplitLayoutStore } from './splitLayout'
 import { api } from '@/services/electronAPI'
 import { i18n } from '@/i18n'
+import { resolveOfficePreviewMode } from '@/utils/artifactFormat'
 
 export interface FileInfo {
   path: string
@@ -959,17 +960,22 @@ export const useAppStore = defineStore('app', () => {
     console.log('[AppStore] Webview closed')
   }
 
-  /** 在右侧面板打开 Office 文件预览（PPT/Word/Excel/PDF） */
-  function openOfficePreview(filePath: string, previewMode: 'html' | 'screenshots' | 'watch' = 'html') {
+  /**
+   * 在右侧面板打开 Office 文件预览（PPT/Word/Excel/PDF）。
+   * 默认走 watch 模式：officecli 实时服务器让 LLM 编辑文档时右侧自动刷新；
+   * pdf 不支持 watch，回退一次性 HTML 渲染（resolveOfficePreviewMode）。
+   */
+  function openOfficePreview(filePath: string, previewMode?: 'html' | 'screenshots' | 'watch') {
+    const mode = previewMode ?? resolveOfficePreviewMode(filePath)
     officePreviewFile.value = filePath
-    officePreviewMode.value = previewMode
+    officePreviewMode.value = mode
     const fileName = filePath.replace(/\\/g, '/').split('/').pop() || filePath
     openInfoTab({
       id: 'office-preview',
       type: 'office-preview',
       title: fileName,
       icon: markRaw(FileText),
-      data: { filePath, mode: previewMode } as any,
+      data: { filePath, mode } as any,
       closeable: true,
     })
   }
