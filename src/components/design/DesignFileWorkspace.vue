@@ -12,7 +12,7 @@
         <h2>{{ t('design.emptyPreviewTitle') }}</h2>
         <p>{{ t('design.emptyPreviewHint') }}</p>
       </div>
-      <DesignPreview v-else-if="viewMode === 'preview'" :html="previewHtml" :title="previewTitle" :session-id="activeSessionId || ''" />
+      <DesignPreview v-else-if="viewMode === 'preview'" :html="previewHtml" :title="previewTitle" :session-id="activeSessionId || ''" :preview-url="previewResourceUrl" :reload-token="previewReloadToken" />
       <div v-else class="code-viewer"><pre><code>{{ sourceCode }}</code></pre></div>
     </div>
     <div class="artifact-list">
@@ -41,10 +41,14 @@ import WorkspaceTabsBar from './WorkspaceTabsBar.vue'
 
 const { t } = useI18n()
 const designStore = useDesignStore()
-const { openTabs, activeTabPath, previewHtml, previewTitle, artifactFiles, activeSessionId } = storeToRefs(designStore)
+const { openTabs, activeTabPath, previewHtml, previewTitle, artifactFiles, activeSessionId, designWorkspace } = storeToRefs(designStore)
 const { addTab, removeTab, setActiveTab } = designStore
 const viewMode = ref<'preview' | 'source'>('preview')
 const sourceCode = ref('')
+/** 活动 HTML 在本地预览服务器上的登记 URL；null 表示不可用（H5 模式等），预览回退 srcdoc */
+const previewResourceUrl = ref<string | null>(null)
+/** 递增即强制重新导航，用于 HTML 之外的 CSS/JS 变更后重取兄弟资源 */
+const previewReloadToken = ref(0)
 
 /** 从完整路径中提取文件名（兼容 Windows 反斜杠与 POSIX 正斜杠） */
 function basename(filepath: string): string {
@@ -58,13 +62,25 @@ function isHtmlFile(filepath: string): boolean {
 }
 
 watch(activeTabPath, async (p) => {
-  if (!p) { previewHtml.value = ''; return }
-  const content = await api.readFile(p)
+  if (!p) {
+    previewResourceUrl.value = null
+    previewHtml.value = ''
+    return
+  }
+  const isHtml = isHtmlFile(p)
+  const [content, url] = await Promise.all([
+    api.readFile(p),
+    isHtml ? api.preview.getUrl(p, designWorkspace.value || undefined) : Promise.resolve(null),
+  ])
+  // 连续切 tab 时慢的那次读取会晚到，不能用它覆盖已经切过去的文件
+  if (activeTabPath.value !== p) return
+  // URL 先于内容写入：子组件在同一批更新里拿到配套的两个值，避免用旧文件的 URL 导航新内容
+  previewResourceUrl.value = url
   previewHtml.value = content || ''
   previewTitle.value = basename(p)
   sourceCode.value = content || ''
-  viewMode.value = isHtmlFile(p) ? 'preview' : 'source'
-})
+  viewMode.value = isHtml ? 'preview' : 'source'
+}, { immediate: true })
 
 // ── 文件监听：接收 Electron 主进程 chokidar 推送的文件变更事件 ──
 // 监听器注册在 DesignFileWorkspace（始终挂载的右侧面板），
@@ -102,8 +118,13 @@ onMounted(() => {
           previewHtml.value = content
           previewTitle.value = filename
           sourceCode.value = content
+          // 内容可能逐字相同（如仅格式化），换 rev 才保证预览真的重新导航
+          previewReloadToken.value++
         }
       }
+    } else if (activeTabPath.value && isHtmlFile(activeTabPath.value)) {
+      // 兄弟 CSS/JS 变更：HTML 文本没动，预览必须重新导航才会再取一次这些资源
+      previewReloadToken.value++
     }
   })
 })
@@ -121,6 +142,7 @@ async function refresh() {
   if (content !== null) {
     previewHtml.value = content
     sourceCode.value = content
+    previewReloadToken.value++
   }
 }
 
