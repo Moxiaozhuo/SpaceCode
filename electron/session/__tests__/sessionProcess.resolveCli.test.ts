@@ -88,6 +88,9 @@ function resolve(): { command: string; args: string[]; launcherEnv?: Record<stri
   }
 }
 
+const enabledFeatures = (args: string[]) =>
+  args.filter((_, i) => args[i - 1] === '--feature')
+
 beforeEach(() => {
   vi.clearAllMocks()
   exists.clear()
@@ -180,5 +183,28 @@ describe('resolveCliCommand — precedence', () => {
     runtime.isPackaged = true
 
     expect(resolve()).toEqual({ command: 'claude', args: [] })
+  })
+})
+
+/**
+ * CONTEXT_COLLAPSE ships in the engine as an empty stub — `initContextCollapse()` only
+ * flips a boolean while every collapse fn returns zeros — yet `shouldAutoCompact` returns
+ * false whenever that boolean is set. Spawning the engine with the flag therefore leaves a
+ * long context with neither collapsing nor auto-compaction, which is why the engine's own
+ * default build keeps it commented out (engine/scripts/defines.ts). The two source-launch
+ * paths must not re-enable it.
+ */
+describe('resolveCliCommand — feature args', () => {
+  it.each([
+    { label: 'dev source path', isPackaged: false },
+    { label: 'packaged src-fallback path', isPackaged: true },
+  ])('omits CONTEXT_COLLAPSE on the $label', ({ isPackaged }) => {
+    runtime.isPackaged = isPackaged
+    exists.add(SRC)
+
+    const features = enabledFeatures(resolve().args)
+
+    expect(features).toContain('BUDDY')
+    expect(features).not.toContain('CONTEXT_COLLAPSE')
   })
 })

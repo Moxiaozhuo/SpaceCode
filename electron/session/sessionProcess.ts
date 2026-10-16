@@ -1926,6 +1926,7 @@ export class SessionProcess extends EventEmitter {
   }
 
   private getFeatureArgs(): string[] {
+    // CONTEXT_COLLAPSE 刻意缺席：引擎侧仍是空壳 stub，启用它会抑制 auto compact（理由见 sessionProcess.resolveCli.test.ts）
     const features = [
       'BUDDY', 'TRANSCRIPT_CLASSIFIER', 'BRIDGE_MODE',
       'AGENT_TRIGGERS_REMOTE', 'CHICAGO_MCP', 'VOICE_MODE',
@@ -1933,7 +1934,7 @@ export class SessionProcess extends EventEmitter {
       'AGENT_TRIGGERS', 'ULTRATHINK', 'BUILTIN_EXPLORE_PLAN_AGENTS',
       'LODESTONE', 'EXTRACT_MEMORIES', 'VERIFICATION_AGENT',
       'KAIROS_BRIEF', 'AWAY_SUMMARY', 'ULTRAPLAN', 'DAEMON',
-      'WORKFLOW_SCRIPTS', 'HISTORY_SNIP', 'CONTEXT_COLLAPSE',
+      'WORKFLOW_SCRIPTS', 'HISTORY_SNIP',
       'MONITOR_TOOL', 'FORK_SUBAGENT', 'UDS_INBOX', 'KAIROS',
       'COORDINATOR_MODE', 'LAN_PIPES', 'POOR',
       'PROACTIVE', 'WEB_BROWSER_TOOL', 'BUILDING_CLAUDE_APPS',
