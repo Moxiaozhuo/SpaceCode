@@ -40,6 +40,13 @@
         </div>
       </template>
 
+      <!-- ExitPlanMode：只展示计划正文（Markdown），input 的其余字段一律不显示 -->
+      <template v-else-if="isPlanApproval">
+        <div v-if="planContent" class="plan-preview">
+          <MarkdownRenderer :content="planContent" />
+        </div>
+      </template>
+
       <!-- 其他工具：通用信息展示 -->
       <template v-else>
         <div class="generic-info">
@@ -66,7 +73,7 @@
         :disabled="isProcessing"
       >
         <CheckCheck :size="16" />
-        {{ t('permission.card.actions.alwaysAllow') }}
+        {{ alwaysAllowLabel }}
       </button>
       
       <button 
@@ -108,9 +115,12 @@ import { ref, computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { 
   Check, X, CheckCheck, Loader2, CheckCircle, XCircle,
-  FileEdit, Terminal as TerminalIcon, FileText as FileTextIcon, Shield
+  FileEdit, Terminal as TerminalIcon, FileText as FileTextIcon, Shield,
+  ClipboardCheck
 } from 'lucide-vue-next'
 import { useTurnStore } from '@/stores/turn'
+import { isPermissionGrantPermanent } from '@/utils/permissionScope'
+import MarkdownRenderer from '@/components/common/MarkdownRenderer.vue'
 
 interface Props {
   messageId: string
@@ -131,6 +141,7 @@ const toolIconMap: Record<string, any> = {
   'Write': FileEdit,
   'Read': FileTextIcon,
   'Bash': TerminalIcon,
+  'ExitPlanMode': ClipboardCheck,
 }
 
 const toolIcon = computed(() => toolIconMap[props.toolName] || Shield)
@@ -155,6 +166,13 @@ const commandText = computed(() =>
   (props.input.command as string) || ''
 )
 
+const isPlanApproval = computed(() => props.toolName === 'ExitPlanMode')
+
+const planContent = computed(() => {
+  const plan = props.input.plan
+  return typeof plan === 'string' ? plan.trim() : ''
+})
+
 const oldString = computed(() => props.input.old_string as string || '')
 const newString = computed(() => props.input.new_string as string || '')
 const hasDiffContent = computed(() => !!oldString.value && !!newString.value)
@@ -171,8 +189,18 @@ const formattedInput = computed(() =>
   JSON.stringify(props.input, null, 2)
 )
 
-const showAlwaysAllow = computed(() => 
-  ['Edit', 'Read', 'Write'].includes(props.toolName)
+// 引擎在 can_use_tool 里随请求附带 permission_suggestions —— 那才是"始终允许"的内容。
+// 没有它就没有任何可落地的规则，按钮也就无从生效，所以按它驱动显隐，而不是按工具名猜。
+const permissionSuggestions = computed(
+  () => turnStore.getPendingPermissionForToolUse(props.toolUseId)?.permissionSuggestions,
+)
+
+const showAlwaysAllow = computed(() => !!permissionSuggestions.value?.length)
+
+const alwaysAllowLabel = computed(() =>
+  isPermissionGrantPermanent(permissionSuggestions.value)
+    ? t('permission.card.actions.alwaysAllow')
+    : t('permission.card.actions.allowForThisSession'),
 )
 
 const statusText = computed(() => {
@@ -230,13 +258,16 @@ async function handleDeny() {
 async function handleAlwaysAllow() {
   isProcessing.value = true
   status.value = 'processing'
-  
+
+  // 必须在 allowPermission 之前取：它会 consume 掉 pending 条目，之后 computed 就空了。
+  const suggestions = permissionSuggestions.value
   try {
     await turnStore.allowPermission(
-      props.messageId, 
-      props.toolUseId, 
-      props.input, 
-      'user_permanent'
+      props.messageId,
+      props.toolUseId,
+      props.input,
+      'user_permanent',
+      suggestions
     )
     status.value = 'completed'
   } catch (error) {
@@ -394,6 +425,16 @@ async function handleAlwaysAllow() {
   color: var(--text-secondary);
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+.plan-preview {
+  padding: 4px 14px 12px;
+  background: var(--surface-soft);
+  border: 1px solid var(--surface-border);
+  border-radius: 6px;
+  max-height: 480px;
+  overflow-y: auto;
+  @include scrollbar-overlay;
 }
 
 .card-actions {

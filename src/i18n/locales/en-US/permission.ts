@@ -18,12 +18,15 @@ export default {
       Bash: 'Run Command',
       Skill: 'Skill',
       AskUserQuestion: 'Ask User',
+      ExitPlanMode: 'Exit Plan Mode',
       default: 'Tool Call',
     },
     actions: {
       allow: 'Allow',
       deny: 'Deny',
       alwaysAllow: 'Always Allow',
+      // Session-scoped rules must not be promised as "Always" — they die with the process
+      allowForThisSession: 'Allow for this session',
       processing: 'Processing...',
       completed: 'Approved',
       denied: 'Denied',

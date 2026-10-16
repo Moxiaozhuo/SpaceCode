@@ -492,32 +492,25 @@ export const useChatSessionStore = defineStore('chatSession', () => {
   /**
    * 对账后端 permission mode 与用户偏好：若不一致则下发用户偏好。
    * 统一了 initClaudeCodeSession / selectSession / activateSession 三处的对账逻辑。
+   *
+   * status.permissionMode 是宿主记下的**意图**，不代表引擎真跑在这个模式上 ——
+   * 引擎在 system/init 里回报过不符（permissionModeVerified === false）时，即便意图
+   * 看起来一致也要重新下发。下发之后的重试与"重启到意图模式"兜底在进程池里
+   * （claudeCodeProcessPool.reconcilePermissionMode），这里不再自己排一遍重试。
    */
   async function syncPermissionMode(
     sessionId: string,
-    status: { permissionMode?: string | null } | null,
+    status: { permissionMode?: string | null; permissionModeVerified?: boolean | null } | null,
     callerName: string,
   ): Promise<void> {
     if (!status?.permissionMode) return
     const { usePermissionPolicyStore } = await import('./permissionPolicy')
     const policyStore = usePermissionPolicyStore()
-    if (status.permissionMode === policyStore.currentPermissionMode) return
-    const claudeCode = api.claudeCode
-    // Linux AppImage 冷启动时 CLI 可能超过 setPermissionMode 的 10s 超时窗口才
-    // 消费控制请求，首次下发会超时失败；失败后有限重试，避免会话静默停留在
-    // bypass 启动模式（engine 以 --dangerously-skip-permissions 启动）。
-    const maxAttempts = 3
-    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-      try {
-        await claudeCode?.setPermissionMode?.(sessionId, policyStore.currentPermissionMode)
-        return
-      } catch (e) {
-        if (attempt >= maxAttempts) {
-          logger.warn('ChatStore', `${callerName}: failed to apply preferred mode | id=${sessionId.slice(0, 8)}`, { error: String(e) })
-          return
-        }
-        await new Promise(resolve => setTimeout(resolve, 3_000))
-      }
+    if (status.permissionMode === policyStore.currentPermissionMode && status.permissionModeVerified !== false) return
+    try {
+      await api.claudeCode?.setPermissionMode?.(sessionId, policyStore.currentPermissionMode)
+    } catch (e) {
+      logger.warn('ChatStore', `${callerName}: failed to apply preferred mode | id=${sessionId.slice(0, 8)}`, { error: String(e) })
     }
   }
 
@@ -1227,6 +1220,8 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     if (!raw || raw.subtype !== 'task_notification') return
     const normalized = taskNotificationStatus(raw.status)
     if (!normalized) return
+    // taskNotificationStatus 只会归一到 completed / failed，但 TeammateStatus 还含 running
+    const finalStatus: 'completed' | 'failed' = normalized.teammateStatus === 'failed' ? 'failed' : 'completed'
     const session = sessions.value.find(s => s.id === targetSessionId)
     if (!session) return
 
@@ -1236,12 +1231,24 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     const summary = typeof raw.summary === 'string' ? raw.summary : ''
     const finalText = [summary, outputFile ? `output_file: ${outputFile}` : ''].filter(Boolean).join('\n')
     let changed = false
+    let taskOutputBackfilled = false
 
     for (const msg of session.messages) {
       const toolCalls = msg.toolCalls
       if (!toolCalls) continue
+      // 逐条改写时以当前数组为基底，避免同一消息内多处命中互相覆盖
+      let next: ToolCall[] | null = null
       for (let i = 0; i < toolCalls.length; i++) {
-        const tc = toolCalls[i]
+        const tc = (next ?? toolCalls)[i]
+        if (tc.name === 'TaskOutput') {
+          // TaskOutput 卡片是一次性快照，任务终态只能旁挂，不能改写 output
+          if (taskId && tc.input?.task_id === taskId && tc.taskFinalStatus !== finalStatus) {
+            next = next ?? [...toolCalls]
+            next[i] = { ...tc, taskFinalStatus: finalStatus, taskFinalAt: Date.now() }
+            taskOutputBackfilled = true
+          }
+          continue
+        }
         if (tc.name !== 'Agent' && tc.name !== 'Task') continue
         const outputAgentId = typeof tc.output === 'string'
           ? tc.output.match(/agentId:\s*([^\s]+)/)?.[1]
@@ -1254,15 +1261,14 @@ export const useChatSessionStore = defineStore('chatSession', () => {
         const nextOutput = finalText
           ? `${tc.output || ''}${tc.output ? '\n\n' : ''}${finalText}`.slice(0, 30000)
           : tc.output
-        const updatedToolCalls: ToolCall[] = [...toolCalls]
-        updatedToolCalls[i] = {
+        next = next ?? [...toolCalls]
+        next[i] = {
           ...tc,
           status: normalized.toolStatus,
           output: nextOutput,
           endTime: Date.now(),
         }
-        msg.toolCalls = updatedToolCalls
-        recordAgentToolCall(session, updatedToolCalls[i], normalized.teammateStatus)
+        recordAgentToolCall(session, next[i], normalized.teammateStatus)
         changed = true
 
         const mappedTeammateId = teammateIdForParentToolUse(targetSessionId, tc.id)
@@ -1270,13 +1276,14 @@ export const useChatSessionStore = defineStore('chatSession', () => {
           (taskId ? normalizeTeammateId(taskId) : normalizeTeammateId(tc.id))
         applySubagentTerminalStatus(session, subagentId, normalized.teammateStatus, finalText)
       }
+      if (next) msg.toolCalls = next
     }
 
     if (!changed && taskId) {
       changed = applySubagentTerminalStatus(session, normalizeTeammateId(taskId), normalized.teammateStatus, finalText)
     }
 
-    if (changed) {
+    if (changed || taskOutputBackfilled) {
       session.updatedAt = Date.now()
       session.lastActivityAt = Date.now()
       saveToStorage()

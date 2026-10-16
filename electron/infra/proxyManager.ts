@@ -77,6 +77,20 @@ export function buildProxyConfigFromSettings(guiSettings: Record<string, any>): 
   }
 }
 
+/**
+ * 影响代理路由的配置字段是否一致（端口不算：它由代理自己占位决定，换个端口不是换套上游）。
+ * 保存后的对齐与 `ensureRunning` 的"要不要重启"共用这个判据。
+ */
+export function isSameProxyConfig(a: ProxyConfig, b: ProxyConfig): boolean {
+  return a.upstreamProvider === b.upstreamProvider
+    && a.upstreamBaseUrl === b.upstreamBaseUrl
+    && a.upstreamApiKey === b.upstreamApiKey
+    && a.modelMapping.haikuModel === b.modelMapping.haikuModel
+    && a.modelMapping.sonnetModel === b.modelMapping.sonnetModel
+    && a.modelMapping.opusModel === b.modelMapping.opusModel
+    && a.modelMapping.defaultModel === b.modelMapping.defaultModel
+}
+
 export class ProxyManager extends EventEmitter {
   private process: ChildProcess | null = null
   private proxyUrl: string = ''
@@ -84,41 +98,84 @@ export class ProxyManager extends EventEmitter {
   private healthCheckTimer: ReturnType<typeof setInterval> | null = null
   private healthRetryCount: number = 0
   private restarting: boolean = false
-  private startingPromise: Promise<string> | null = null
+  /** 正在跑的启动队列；并发的 start() 挂在同一个 Promise 上等最终结果。 */
+  private startPromise: Promise<string> | null = null
+  /** 队列最新收到的配置 —— 后到的覆盖先到的，最后一次请求赢。 */
+  private desiredConfig: ProxyConfig | null = null
   private lastHealthStatus: 'unknown' | 'healthy' | 'unhealthy' = 'unknown'
 
   /**
    * 启动代理子进程。如果代理已经在运行，会先停止再重启。
    *
-   * 如果另一个 start() 调用正在进行，会直接返回该调用的 Promise，
-   * 避免并发启动导致的竞态条件（startup auto-start 和 engineSourceChanged
-   * 可能同时调用 start()）。
+   * 已有 start() 在飞时，把新配置记下来挂进同一个队列，等当前这次落地后再起一次 ——
+   * 直接返回在飞那次的 Promise 会把后来的配置丢掉（启动自启、设置保存对齐、
+   * engineSourceChanged 都可能与另一次保存撞在一起）。等待方拿到的是队列排空后的
+   * 最终 URL，所以"启动完成"意味着跑的就是最后一次请求带来的配置。
+   *
+   * 队列排空前若有人调用 stop()，还没起的那份配置算被撤单，等待方拿到失败而不是
+   * 一个已经没有进程在服务的 URL。
    */
   async start(config: ProxyConfig): Promise<string> {
-    // 如果已经有 start() 正在进行，直接返回同一个 Promise
-    if (this.startingPromise) {
-      debug('ProxyManager', 'start() already in progress, reusing existing promise')
-      return this.startingPromise
+    // 队列已经在趋奔同一份上游配置，重复请求不必再起一个子进程。
+    if (this.startPromise && this.desiredConfig && isSameProxyConfig(this.desiredConfig, config)) {
+      debug('ProxyManager', 'start() already queued for the same config, reusing it')
+      return this.startPromise
     }
 
-    this.startingPromise = this.doStart(config)
+    this.desiredConfig = config
+    if (this.startPromise) {
+      debug('ProxyManager', 'start() queued behind an in-flight start')
+      return this.startPromise
+    }
+
+    this.startPromise = this.drainStartQueue()
+    return this.startPromise
+  }
+
+  private async drainStartQueue(): Promise<string> {
     try {
-      return await this.startingPromise
+      let url = this.proxyUrl
+      // `handled` 按对象身份比对：只有"最新请求还没整个跑过"时才再起一次。
+      let handled: ProxyConfig | null = null
+      while (this.desiredConfig !== handled) {
+        const config: ProxyConfig | null = this.desiredConfig
+        // stop() 把还没起的那份配置撤了单。把失败交给等待方，而不是让它拿到一个
+        // 刚被停掉的代理的 URL —— 那会被调用方读成"我的配置对齐成功了"。
+        if (!config) throw new Error('Proxy start cancelled by stop()')
+        url = await this.doStart(config)
+        handled = config
+      }
+      return url
     } finally {
-      this.startingPromise = null
+      this.startPromise = null
     }
   }
 
   /**
-   * 确保代理正在运行。如果已经在运行则不重启，避免不必要的 stop+start 循环。
+   * 等启动队列排空后返回；没有队列在飞时立即返回。
+   *
+   * `getProxyUrl()` / `getConfig()` 是不等队列的快照。要在"用这份配置起会话"之前读
+   * 它们，就得先过这道屏障 —— 否则读到的是上一个（可能正要被停掉的）代理的地址，
+   * 而会话一旦带上这个地址就不会再回头更正。
+   */
+  async awaitStart(): Promise<void> {
+    if (this.startPromise) await this.startPromise.catch(() => null)
+  }
+
+  /**
+   * 确保代理正在运行。如果已经在运行且上游配置一致则不重启，避免不必要的 stop+start 循环。
    *
    * 引擎来源切换时调用此方法而非 start()，因为代理配置取决于 authMethod
-   * 和 API 设置，与 engineSource 无关。无需在切换引擎来源时重启代理。
+   * 和 API 设置，与 engineSource 无关。
    */
   async ensureRunning(config: ProxyConfig): Promise<string> {
-    if (this.startingPromise) {
-      debug('ProxyManager', 'ensureRunning: start() in progress, waiting')
-      return this.startingPromise
+    if (this.startPromise) {
+      // 先让在飞的那次落地再判 —— 拿别人的结果当答案会丢掉本次带来的配置。
+      const settledUrl = await this.startPromise.catch(() => null)
+      if (settledUrl === null) return this.start(config)
+      if (this.config && isSameProxyConfig(this.config, config)) return settledUrl
+      debug('ProxyManager', 'ensureRunning: running proxy uses a different config, aligning')
+      return this.start(config)
     }
     if (this.isRunning()) {
       debug('ProxyManager', 'ensureRunning: proxy already running, skipping restart')
@@ -129,11 +186,19 @@ export class ProxyManager extends EventEmitter {
 
   private async doStart(config: ProxyConfig): Promise<string> {
     if (this.process) {
-      await this.stop()
+      await this.killChild()
     }
 
     const port = await this.findAvailablePort(config.port || PROXY_PORT_START)
     config.port = port
+
+    // 探测端口这段时间里可能又来了一次 start()（换成了更新的上游），或者 stop() 撤了
+    // 单。两种情况下这份配置都没人认领了，不要为它起子进程 —— 队列下一轮会用最终配置。
+    if (this.desiredConfig !== config) {
+      debug('ProxyManager', 'start() target was superseded or cancelled, skipping spawn')
+      return this.proxyUrl
+    }
+
     this.config = config
     this.healthRetryCount = 0
     this.lastHealthStatus = 'unknown'
@@ -180,6 +245,14 @@ export class ProxyManager extends EventEmitter {
   }
 
   async stop(): Promise<void> {
+    // 撤掉队列里还没起的那份配置：否则一次并发的 start() 会在停掉之后又复活一个子进程
+    // （引擎来源切回不需要代理的提供商时撞上的就是这条）。
+    this.desiredConfig = null
+    await this.killChild()
+  }
+
+  /** 干掉当前子进程并停掉健康检查；不动队列的认领状态。 */
+  private async killChild(): Promise<void> {
     this.stopHealthCheck()
 
     if (!this.process) {
@@ -459,7 +532,7 @@ export class ProxyManager extends EventEmitter {
   }
 
   private async restartProxy(): Promise<void> {
-    if (this.restarting || !this.config) {
+    if (this.restarting || !this.config || this.startPromise) {
       return
     }
 
@@ -467,8 +540,8 @@ export class ProxyManager extends EventEmitter {
     this.emit('restarting')
 
     try {
-      await this.stop()
-      await this.doStart(this.config)
+      // 走 start() 那把锁：直接 doStart 会和外部一次保存触发的启动并发，起两个子进程。
+      await this.start(this.config)
       info('ProxyManager', 'Proxy restarted successfully')
     } catch (err) {
       error('ProxyManager', 'Failed to restart proxy', { error: err instanceof Error ? err.message : String(err) })

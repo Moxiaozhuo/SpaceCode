@@ -1,7 +1,7 @@
 import type { BrowserWindow } from 'electron'
 import { ClaudeCodeProcessPool } from '../claudeCodeProcessPool'
 import { SessionConfig } from '../../session/sessionProcess'
-import type { IEngine, EngineType, EngineSessionConfig, EngineSessionStatus, AgentInfo, ImageAttachment, PermissionDecision, PermissionMode } from './types'
+import type { IEngine, EngineType, EngineSessionConfig, EngineSessionStatus, AgentInfo, ImageAttachment, PermissionDecision, PermissionMode, PermissionUpdate } from './types'
 import * as fs from 'fs'
 import * as path from 'path'
 import { info } from '../../infra/logger'
@@ -77,8 +77,9 @@ export class ClaudeCodeEngine implements IEngine {
   }
 
   sendMessage(sessionId: string, content: string, images?: ImageAttachment[]): Promise<void> {
-    this.pool.sendMessage(sessionId, content, images)
-    return Promise.resolve()
+    // 池会在转发前做权限模式核验与 --thinking 重启，这两步是异步的，
+    // 且可能判定"不该发送"—— 必须把这条 Promise 原样交给调用方。
+    return this.pool.sendMessage(sessionId, content, images)
   }
 
   submitToolAnswer(sessionId: string, toolCallId: string, answers: Record<string, string>): Promise<void> {
@@ -103,8 +104,9 @@ export class ClaudeCodeEngine implements IEngine {
     requestId: string,
     updatedInput?: Record<string, unknown>,
     decisionClassification?: 'user_temporary' | 'user_permanent',
+    updatedPermissions?: PermissionUpdate[],
   ): Promise<void> {
-    this.pool.allowPermission(sessionId, requestId, updatedInput, decisionClassification)
+    this.pool.allowPermission(sessionId, requestId, updatedInput, decisionClassification, updatedPermissions)
     return Promise.resolve()
   }
 
@@ -178,6 +180,7 @@ export class ClaudeCodeEngine implements IEngine {
       status: status.status,
       isRunning: status.isRunning,
       permissionMode: status.permissionMode as PermissionMode | undefined,
+      permissionModeVerified: status.permissionModeVerified,
     }
   }
 
@@ -188,6 +191,7 @@ export class ClaudeCodeEngine implements IEngine {
       status: s.status,
       isRunning: s.isRunning,
       permissionMode: s.permissionMode as PermissionMode | undefined,
+      permissionModeVerified: s.permissionModeVerified,
     }))
   }
 

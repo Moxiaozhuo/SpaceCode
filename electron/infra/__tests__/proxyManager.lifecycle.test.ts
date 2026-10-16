@@ -5,9 +5,10 @@ import type { ProxyConfig } from '../../proxy/types'
 /**
  * `ProxyManager` process lifecycle — the module that decides where every outbound
  * AI request goes: `sessionProcess` gates on `!!proxyManager.getProxyUrl()` alone
- * (not on `isRunning()`), and `settingsIpc` gates a restart on `isRunning()`. So
- * the values these two return after a half-failed start are the difference between
- * traffic reaching the proxy and traffic reaching a dead port.
+ * (not on `isRunning()`) after awaiting the start queue, and `settingsIpc` gates a
+ * restart on `isRunning()`. So the values these two return after a half-failed start
+ * are the difference between traffic reaching the proxy and traffic reaching a dead
+ * port.
  *
  * Contract under test:
  *   - the child is started with the current Electron binary, `ELECTRON_RUN_AS_NODE=1`
@@ -16,8 +17,12 @@ import type { ProxyConfig } from '../../proxy/types'
  *   - readiness is one NDJSON `{type:'ready',port}` line on stdout; the port the
  *     child reports is what `getProxyUrl()` returns, and start() rejects on a 10s
  *     timeout or on an exit before ready.
- *   - `start()` is single-flight; `stop()` is idempotent and escalates
- *     SIGTERM -> SIGKILL after 5s.
+ *   - `start()` is one queue, not one race: concurrent calls settle on the *latest*
+ *     config; a `stop()` revokes the config that has not run yet, so the queue cannot
+ *     resurrect a proxy someone just asked to stop; `stop()` is idempotent and
+ *     escalates SIGTERM -> SIGKILL after 5s.
+ *   - `awaitStart()` is the barrier a snapshot reader takes before trusting
+ *     `getProxyUrl()`, and it settles (not hangs) when the queued start fails.
  *   - a failed start does NOT clear `proxyUrl` or null the child: state must be
  *     read together, or the caller trusts a URL nobody is listening on.
  */
@@ -240,7 +245,7 @@ describe('start — port probing', () => {
   })
 })
 
-describe('start — single flight', () => {
+describe('start — one queue, latest config wins', () => {
   it('reuses the in-flight run instead of spawning a second child', async () => {
     spawnState.autoReadyPort = null
     const first = manager.start(makeConfig())
@@ -254,19 +259,23 @@ describe('start — single flight', () => {
     expect(spawnState.children).toHaveLength(1)
   })
 
-  it('drops the second call config, so a settings save during startup loses the new provider', async () => {
+  it('applies the second call config once the in-flight run settles, so a settings save during startup is not lost', async () => {
     spawnState.autoReadyPort = null
-    const wanted = makeConfig(34567)
+    spawnState.exitOnKill = true
+    const wanted = makeConfig(34600)
     wanted.upstreamBaseUrl = 'https://second.test/v1'
     const first = manager.start(makeConfig())
     await flushTurns()
 
     const second = manager.start(wanted)
     spawnState.child(0).writeReady(34567)
-    await Promise.all([first, second])
+    await flushTurns(12)
+    spawnState.child(1).writeReady(34600)
 
-    expect(manager.getConfig()!.upstreamBaseUrl).toBe('https://o.test/v1')
-    expect(spawnState.children).toHaveLength(1)
+    await expect(second).resolves.toBe('http://127.0.0.1:34600')
+    await expect(first).resolves.toBe('http://127.0.0.1:34600')
+    expect(spawnState.children).toHaveLength(2)
+    expect(manager.getConfig()!.upstreamBaseUrl).toBe('https://second.test/v1')
   })
 
   it('spawns a fresh child once the previous run has settled', async () => {
@@ -278,6 +287,111 @@ describe('start — single flight', () => {
     await manager.start(makeConfig())
 
     expect(spawnState.children).toHaveLength(2)
+  })
+})
+
+describe('start queue — stop() revokes what has not run yet', () => {
+  it('fails a queued config instead of starting a proxy after the stop', async () => {
+    spawnState.autoReadyPort = null
+    const first = manager.start(makeConfig())
+    // 断言尽早挂上：等待方拿到的是同一条队列的失败，晚一拍就是未处理的 rejection
+    const firstFails = expect(first).rejects.toThrow('Proxy start cancelled by stop()')
+    await flushTurns()
+    const wanted = makeConfig(34600)
+    wanted.upstreamBaseUrl = 'https://second.test/v1'
+    const second = manager.start(wanted)
+    const secondFails = expect(second).rejects.toThrow('Proxy start cancelled by stop()')
+
+    const stopping = manager.stop()
+    await flushTurns()
+    // 在飞的那次还是落了地（先 ready 再退出，让它走完正常返回），队列随后发现
+    // 第二份配置已经没人认领。
+    spawnState.child(0).writeReady(34567)
+    spawnState.child(0).exitWith(0)
+    await stopping
+
+    await Promise.all([firstFails, secondFails])
+    expect(spawnState.children).toHaveLength(1)
+    expect(manager.isRunning()).toBe(false)
+  })
+
+  it('does not even spawn for a config revoked while the port probe was running', async () => {
+    netState.busyPorts.add(34567)
+    spawnState.autoReadyPort = null
+    const started = manager.start(makeConfig())
+    const startedFails = expect(started).rejects.toThrow('Proxy start cancelled by stop()')
+    await flushTurns(1)
+
+    const stopping = manager.stop()
+    await flushTurns()
+    await stopping
+
+    await startedFails
+    expect(spawnState.calls).toEqual([])
+  })
+
+  it('runs a start that arrives after a revoked one instead of inheriting its failure', async () => {
+    spawnState.autoReadyPort = null
+    const queued = manager.start(makeConfig())
+    const queuedFails = expect(queued).rejects.toThrow()
+    await flushTurns()
+    const wanted = makeConfig(34600)
+    wanted.upstreamBaseUrl = 'https://second.test/v1'
+    const second = manager.start(wanted)
+    const secondFails = expect(second).rejects.toThrow('Proxy start cancelled by stop()')
+
+    const stopping = manager.stop()
+    spawnState.child(0).writeReady(34567)
+    spawnState.child(0).exitWith(0)
+    await stopping
+    await Promise.all([queuedFails, secondFails])
+
+    spawnState.autoReadyPort = 34600
+    await expect(manager.start(wanted)).resolves.toBe('http://127.0.0.1:34600')
+    expect(manager.getConfig()!.upstreamBaseUrl).toBe('https://second.test/v1')
+  })
+})
+
+describe('awaitStart — the barrier snapshot readers use', () => {
+  it('returns at once when nothing is queued', async () => {
+    await expect(manager.awaitStart()).resolves.toBeUndefined()
+
+    expect(spawnState.calls).toEqual([])
+  })
+
+  it('settles only after the queue lands on the latest config', async () => {
+    spawnState.autoReadyPort = null
+    spawnState.exitOnKill = true
+    const first = manager.start(makeConfig())
+    await flushTurns()
+    const wanted = makeConfig(34600)
+    wanted.upstreamBaseUrl = 'https://second.test/v1'
+    const second = manager.start(wanted)
+
+    let settled = false
+    const barrier = manager.awaitStart().then(() => {
+      settled = true
+    })
+
+    spawnState.child(0).writeReady(34567)
+    await flushTurns(12)
+    expect(settled).toBe(false)
+
+    spawnState.child(1).writeReady(34600)
+    await barrier
+
+    expect(manager.getProxyUrl()).toBe('http://127.0.0.1:34600')
+    await Promise.all([first, second])
+  })
+
+  it('does not hang the reader when the queued start fails', async () => {
+    spawnState.autoReadyPort = null
+    const started = manager.start(makeConfig())
+    await flushTurns()
+
+    spawnState.child(0).exitWith(1)
+    await expect(manager.awaitStart()).resolves.toBeUndefined()
+    await expect(started).rejects.toThrow('Proxy process exited before ready with code 1')
   })
 })
 
@@ -302,6 +416,24 @@ describe('ensureRunning — never restarts a live proxy', () => {
     await expect(ensuring).resolves.toBe('http://127.0.0.1:34567')
     await starting
     expect(spawnState.children).toHaveLength(1)
+  })
+
+  it('aligns the proxy when the in-flight start settled on a different provider', async () => {
+    spawnState.autoReadyPort = null
+    spawnState.exitOnKill = true
+    const starting = manager.start(makeConfig())
+    await flushTurns()
+
+    const wanted = makeConfig(34600)
+    wanted.upstreamBaseUrl = 'https://second.test/v1'
+    const ensuring = manager.ensureRunning(wanted)
+    spawnState.child(0).writeReady(34567)
+    await flushTurns(12)
+    spawnState.child(1).writeReady(34600)
+
+    await expect(ensuring).resolves.toBe('http://127.0.0.1:34600')
+    await starting
+    expect(manager.getConfig()!.upstreamBaseUrl).toBe('https://second.test/v1')
   })
 
   it('starts the proxy when nothing is running', async () => {

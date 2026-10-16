@@ -18,12 +18,15 @@ export default {
       Bash: '执行命令',
       Skill: '技能调用',
       AskUserQuestion: '询问用户',
+      ExitPlanMode: '退出计划模式',
       default: '工具调用',
     },
     actions: {
       allow: '允许',
       deny: '拒绝',
       alwaysAllow: '始终允许',
+      // 引擎给的规则只落在会话内存时不能用"始终"承诺 —— 重启进程即失效
+      allowForThisSession: '本会话内不再询问',
       processing: '处理中...',
       completed: '已批准',
       denied: '已拒绝',
