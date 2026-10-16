@@ -39,6 +39,7 @@ export interface OfficeCliWatchHandle {
   id: string
   filePath: string
   port: number
+  /** Empty until the watch server has printed its preview URL. */
   url: string
   process: ChildProcess
 }
@@ -46,6 +47,9 @@ export interface OfficeCliWatchHandle {
 // ===== Global state =====
 
 const watchProcesses = new Map<string, OfficeCliWatchHandle>()
+
+/** Keeps watch ids unique when several starts land in the same millisecond. */
+let watchIdSeq = 0
 
 // ===== Binary path resolution =====
 
@@ -141,18 +145,29 @@ export function getOfficeCliInstalledBinary(): string {
 /**
  * Kill a process tree (including children).
  * Windows: taskkill /pid <pid> /T /F (SIGTERM does not kill children)
- * macOS/Linux: process-group kill
+ * macOS/Linux: process-group kill — only valid for children spawned with
+ * `detached`, which makes them a group leader; otherwise the group does not
+ * exist and the signal would be silently lost, so fall back to the pid.
  */
 function killProcessTree(pid: number): void {
   try {
     if (process.platform === 'win32') {
       spawn('taskkill', ['/pid', String(pid), '/T', '/F'], { windowsHide: true })
-    } else {
+      return
+    }
+    try {
       process.kill(-pid, 'SIGTERM')
+    } catch {
+      process.kill(pid, 'SIGTERM')
     }
   } catch {
     // process may have already exited
   }
+}
+
+/** Own process group on macOS/Linux so killProcessTree() can reach the tree. */
+function spawnDetached(): boolean {
+  return process.platform !== 'win32'
 }
 
 // ===== Core execution =====
@@ -180,6 +195,7 @@ async function execOfficeCli(options: OfficeCliExecOptions): Promise<OfficeCliEx
       env,
       shell: false,
       windowsHide: true,
+      detached: spawnDetached(),
     })
 
     let stdout = ''
@@ -586,11 +602,23 @@ throw new Error('OfficeCLI binary not found. Run `npm run download:officecli` or
       cwd: path.dirname(filePath),
       shell: false,
       windowsHide: true,
+      detached: spawnDetached(),
     })
 
+    // 从 spawn 成功那一刻就登记，不等 URL：预览地址可能要等满超时才打印，
+    // 也可能永远不打印，而 watch:stop / stopAll / 退出清理都必须够得着这个进程，
+    // 否则常驻的 watch server 会带着端口活过应用。
+    const id = `watch-${Date.now()}-${++watchIdSeq}`
+    const handle: OfficeCliWatchHandle = {
+      id,
+      filePath,
+      port: port || 26315,
+      url: '',
+      process: child,
+    }
+    watchProcesses.set(id, handle)
+
     return new Promise((resolve, reject) => {
-      const id = `watch-${Date.now()}`
-      let resolvedPort = port || 26315
       let outputBuffer = ''
       let stderrBuffer = ''
       let settled = false
@@ -598,6 +626,7 @@ throw new Error('OfficeCLI binary not found. Run `npm run download:officecli` or
       const timer = setTimeout(() => {
         if (settled) return
         settled = true
+        watchProcesses.delete(id)
         if (child.pid) killProcessTree(child.pid)
         reject(new Error('watch startup timeout'))
       }, 10000)
@@ -607,17 +636,10 @@ throw new Error('OfficeCLI binary not found. Run `npm run download:officecli` or
         const urlMatch = outputBuffer.match(/http:\/\/localhost:(\d+)/)
         if (urlMatch && !settled) {
           settled = true
-          resolvedPort = parseInt(urlMatch[1])
           clearTimeout(timer)
-          const handle: OfficeCliWatchHandle = {
-            id,
-            filePath,
-            port: resolvedPort,
-            url: `http://localhost:${resolvedPort}`,
-            process: child,
-          }
-          watchProcesses.set(id, handle)
-          resolve({ id, filePath, port: resolvedPort, url: handle.url })
+          handle.port = parseInt(urlMatch[1])
+          handle.url = `http://localhost:${handle.port}`
+          resolve({ id, filePath, port: handle.port, url: handle.url })
         }
       })
 
@@ -626,6 +648,7 @@ throw new Error('OfficeCLI binary not found. Run `npm run download:officecli` or
       })
 
       child.on('error', (err: Error) => {
+        watchProcesses.delete(id)
         if (settled) return
         settled = true
         clearTimeout(timer)
@@ -676,11 +699,14 @@ throw new Error('OfficeCLI binary not found. Run `npm run download:officecli` or
 
   // List active watches
   ipcMain.handle('officecli:watch:list', async (): Promise<Array<{ id: string; filePath: string; url: string }>> => {
-    return Array.from(watchProcesses.values()).map(h => ({
-      id: h.id,
-      filePath: h.filePath,
-      url: h.url,
-    }))
+    // url 为空 = 还在启动中，没有可预览的地址，不对外暴露
+    return Array.from(watchProcesses.values())
+      .filter(h => h.url)
+      .map(h => ({
+        id: h.id,
+        filePath: h.filePath,
+        url: h.url,
+      }))
   })
 
   // Read an image file as base64 data URL (bypasses file:// CORS in dev mode)
