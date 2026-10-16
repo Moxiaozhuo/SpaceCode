@@ -44,6 +44,19 @@ export interface OfficeCliWatchHandle {
   process: ChildProcess
 }
 
+export interface OfficeCliScreenshotResult {
+  /** Absolute path of the rendered PNG. */
+  path: string
+  /** Total pages in the document; equals `end` when the count is unavailable. */
+  pageCount: number
+  /** First and last page contained in `path`. */
+  start: number
+  end: number
+  /** Pixel size of `path`; zero when the image is not a readable PNG. */
+  width: number
+  height: number
+}
+
 // ===== Global state =====
 
 const watchProcesses = new Map<string, OfficeCliWatchHandle>()
@@ -229,6 +242,78 @@ async function execOfficeCli(options: OfficeCliExecOptions): Promise<OfficeCliEx
       reject(new Error(`OfficeCLI execution failed: ${err.message}`))
     })
   })
+}
+
+// ===== Multi-page screenshot helpers =====
+
+/**
+ * Pages rendered per screenshot call. officecli stacks a page range into ONE
+ * PNG, and a long document would exceed the renderer's per-side texture limit,
+ * so the panel asks for a bounded chunk and repeats it for the next pages.
+ */
+const SCREENSHOT_PAGE_CHUNK = 8
+
+const PNG_SIGNATURE = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a])
+
+/**
+ * How each format reports its total page count. A format missing here has no
+ * countable pages, so it renders exactly one page per call.
+ */
+const PAGE_COUNT_QUERY: Record<string, { args: string[]; key: string }> = {
+  '.pptx': { args: ['stats', '--json'], key: 'slides' },
+  '.docx': { args: ['stats', '--page-count', '--json'], key: 'pages' },
+}
+
+interface OfficeCliStatsPayload {
+  data?: Record<string, unknown>
+}
+
+async function readStatsNumber(
+  filePath: string,
+  args: string[],
+  key: string,
+): Promise<number | null> {
+  try {
+    const result = await execOfficeCli({ args, cwd: path.dirname(filePath), timeout: 30000 })
+    if (result.exitCode !== 0) return null
+    const value = (JSON.parse(result.stdout) as OfficeCliStatsPayload).data?.[key]
+    return typeof value === 'number' && value > 0 ? value : null
+  } catch {
+    return null
+  }
+}
+
+/**
+ * Total pages, or null when the format has no count or the lookup failed —
+ * docx repagination needs Word, so null is a normal outcome, not an error.
+ */
+async function readPageCount(filePath: string): Promise<number | null> {
+  const query = PAGE_COUNT_QUERY[path.extname(filePath).toLowerCase()]
+  if (!query) return null
+  return readStatsNumber(filePath, ['view', filePath, ...query.args], query.key)
+}
+
+function readPngSize(filePath: string): { width: number; height: number } {
+  const unknown = { width: 0, height: 0 }
+  let fd: number | undefined
+  try {
+    const header = Buffer.alloc(26)
+    fd = fs.openSync(filePath, 'r')
+    if (fs.readSync(fd, header, 0, 26, 0) < 26) return unknown
+    if (!header.subarray(0, 8).equals(PNG_SIGNATURE)) return unknown
+    if (header.toString('ascii', 12, 16) !== 'IHDR') return unknown
+    return { width: header.readUInt32BE(16), height: header.readUInt32BE(20) }
+  } catch {
+    return unknown
+  } finally {
+    if (fd !== undefined) {
+      try {
+        fs.closeSync(fd)
+      } catch {
+        // ignore
+      }
+    }
+  }
 }
 
 // ===== Ensure installed (agent-side PATH) =====
@@ -539,38 +624,46 @@ return resolveOfficeCliBinary() !== null
     return tmpPath
   })
 
-  // Render file as PNG screenshots
-  // NOTE: officecli's -o expects a *file path*, not a directory. Passing a
-  // directory causes officecli to fail with a misleading "No headless browser"
-  // error. We construct a file path inside the caller-provided directory.
-  ipcMain.handle('officecli:viewScreenshot', async (_event, filePath: string, outputDir: string, page?: number): Promise<string[]> => {
+  // Render a chunk of pages as one PNG sheet (pages stacked top-to-bottom).
+  // NOTE: officecli's -o expects a *file path*, not a directory, and always
+  // writes a single file — a page range becomes a vertically stacked sheet,
+  // not one image per page. Passing a directory makes officecli fail with a
+  // misleading "No headless browser" error.
+  ipcMain.handle('officecli:viewScreenshot', async (_event, filePath: string, outputDir: string, start = 1): Promise<OfficeCliScreenshotResult> => {
     // Ensure output directory exists
     fs.mkdirSync(outputDir, { recursive: true })
 
-    const baseName = path.basename(filePath, path.extname(filePath))
-    const pageLabel = page ? `page-${page}` : 'page-1'
-    const outFile = path.join(outputDir, `${baseName}-${pageLabel}.png`)
+    // The range must be settled before rendering: when the page count is
+    // unavailable the sheet has to be a single page, otherwise the panel would
+    // be handed an N-page stack it can only label as page one.
+    const pageCount = await readPageCount(filePath)
+    const last = pageCount === null ? start : Math.min(start + SCREENSHOT_PAGE_CHUNK - 1, pageCount)
 
-    const args = ['view', filePath, 'screenshot', '-o', outFile]
-    if (page) {
-      args.push('--page', String(page))
-    }
-    const result = await execOfficeCli({ args, cwd: path.dirname(filePath), timeout: 60000 })
+    const baseName = path.basename(filePath, path.extname(filePath))
+    const outFile = path.join(outputDir, `${baseName}-pages-${start}-${last}.png`)
+
+    const result = await execOfficeCli({
+      args: ['view', filePath, 'screenshot', '--page', `${start}-${last}`, '-o', outFile],
+      cwd: path.dirname(filePath),
+      timeout: 60000,
+    })
+
     if (result.exitCode !== 0) {
       throw new Error(`Screenshot render failed: ${result.stderr || result.stdout}`)
     }
 
-    // officecli echoes the generated file path in stdout; fall back to our
-    // constructed path if stdout is empty.
-    const generatedPath = result.stdout.trim()
-    const resolvedPath = generatedPath && fs.existsSync(generatedPath)
-      ? generatedPath
-      : (fs.existsSync(outFile) ? outFile : '')
+    // stdout is the generated file path, followed by a "[pages] total=N" note
+    // for pptx — only the first line can be a path.
+    const reported = result.stdout.split(/\r?\n/).map((line) => line.trim()).find(Boolean) ?? ''
+    const resolvedPath = [reported, outFile].find((p) => p && fs.existsSync(p)) ?? ''
 
     if (!resolvedPath) {
       throw new Error(`Screenshot produced no output. ${result.stderr || result.stdout}`)
     }
-    return [resolvedPath]
+
+    const { width, height } = readPngSize(resolvedPath)
+
+    return { path: resolvedPath, pageCount: pageCount ?? last, start, end: last, width, height }
   })
 
 // Start watch mode

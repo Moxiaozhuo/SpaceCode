@@ -304,9 +304,9 @@ contextBridge.exposeInMainWorld('electronAPI', {
     /** Render a file as HTML, returns the HTML file path */
     viewHtml: (filePath: string, outputDir?: string) =>
       ipcRenderer.invoke('officecli:viewHtml', filePath, outputDir),
-    /** Render a file as PNG screenshots, returns a list of image paths */
-    viewScreenshot: (filePath: string, outputDir: string, page?: number) =>
-      ipcRenderer.invoke('officecli:viewScreenshot', filePath, outputDir, page),
+    /** Render a chunk of pages as one PNG sheet (pages stacked vertically) */
+    viewScreenshot: (filePath: string, outputDir: string, start?: number) =>
+      ipcRenderer.invoke('officecli:viewScreenshot', filePath, outputDir, start),
     /** Start a live-preview watch server */
     watchStart: (filePath: string, port?: number) =>
       ipcRenderer.invoke('officecli:watch:start', filePath, port),

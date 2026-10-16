@@ -130,6 +130,16 @@ export interface ElectronArtifactsAPI {
   onChanged: (callback: (data: { eventType: string; filename: string }) => void) => () => void
 }
 
+/** One PNG sheet of stacked pages returned by officecli:viewScreenshot */
+export interface OfficeCliScreenshotResult {
+  path: string
+  pageCount: number
+  start: number
+  end: number
+  width: number
+  height: number
+}
+
 export interface ElectronOfficeCLIAPI {
 version: () => Promise<string>
 checkInstalled: () => Promise<boolean>
@@ -137,7 +147,7 @@ download: () => Promise<{ success: boolean; path?: string; error?: string }>
 onDownloadProgress: (callback: (progress: { stage: string; message: string; percent: number }) => void) => () => void
 exec: (options: { args: string[]; cwd?: string; timeout?: number; env?: Record<string, string> }) => Promise<unknown>
   viewHtml: (filePath: string, outputDir?: string) => Promise<string>
-  viewScreenshot: (filePath: string, outputDir: string, page?: number) => Promise<string[]>
+  viewScreenshot: (filePath: string, outputDir: string, start?: number) => Promise<OfficeCliScreenshotResult>
   watchStart: (filePath: string, port?: number) => Promise<{ id: string; filePath: string; port: number; url: string }>
   watchStop: (watchId: string) => Promise<boolean>
   watchStopAll: () => Promise<number>
