@@ -49,8 +49,10 @@ import { usePermissionPolicyStore } from '@/stores/permissionPolicy'
 import type { PermissionMode } from '@/shared/channels/claudeCode'
 
 const props = defineProps<{
-  /** 受控模式：宿主自己存值（定时任务把权限模式存在任务上，不该改全局默认） */
+  /** 受控模式：宿主自己存值（定时任务把权限模式存在任务上，不该改会话/全局默认） */
   modelValue?: PermissionMode
+  /** 本选择器归属的会话；非受控时按它读写该会话的模式 */
+  sessionId?: string | null
 }>()
 
 const emit = defineEmits<{
@@ -90,7 +92,7 @@ const modes = [
   },
 ]
 
-const currentMode = computed(() => props.modelValue ?? policyStore.currentPermissionMode)
+const currentMode = computed(() => props.modelValue ?? policyStore.getPermissionMode(props.sessionId))
 const currentModeLabel = computed(() => 
   modes.find(m => m.value === currentMode.value)?.label || t('permission.modeSelector.default')
 )
@@ -104,7 +106,7 @@ async function selectMode(mode: PermissionMode) {
   if (props.modelValue !== undefined) {
     emit('update:modelValue', mode)
   } else {
-    await policyStore.setPermissionMode(mode)
+    await policyStore.setPermissionMode(props.sessionId, mode)
   }
   isOpen.value = false
 }

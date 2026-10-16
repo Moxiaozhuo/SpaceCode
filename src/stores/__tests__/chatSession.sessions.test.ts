@@ -198,15 +198,37 @@ describe('chatSession selectSession / deactivateSession', () => {
     expect(store.turnCheckpoints).toEqual([])
   })
 
-  it('pushes the preferred permission mode to a running session whose backend mode drifted', async () => {
+  it('pushes the session own permission mode when the backend drifted away from it', async () => {
     mocks.getSessionStatus.mockResolvedValueOnce({ isRunning: true, permissionMode: 'bypassPermissions' })
     const store = await loadStore()
     store.createSession('A', '/proj', 'a')
 
     await store.selectSession('a')
 
-    // 用户偏好默认是 default，后端是 bypassPermissions → 下发用户偏好
+    // A 从没主动切过模式 → 取全局默认；后端跑在 bypassPermissions → 下发会话口径
     expect(mocks.setPermissionMode).toHaveBeenCalledWith('a', 'default')
+  })
+
+  it('switching back to a running session does not re-apply another session mode', async () => {
+    const store = await loadStore()
+    store.createSession('A', '/proj/a', 'a')
+    store.createSession('B', '/proj/b', 'b')
+    const { usePermissionPolicyStore } = await import('../permissionPolicy')
+    const policy = usePermissionPolicyStore()
+
+    // A 用完全信任，B 用计划模式 —— 两个会话各自记自己的模式
+    await policy.setPermissionMode('a', 'bypassPermissions')
+    await policy.setPermissionMode('b', 'plan')
+    mocks.setPermissionMode.mockClear()
+    mocks.getSessionStatus.mockResolvedValue({ isRunning: true, permissionMode: 'bypassPermissions' })
+
+    store.selectSession('a')
+    await new Promise(r => setTimeout(r, 0))
+
+    // 这是原来的串扰：B 选的 plan 会被当成"用户偏好"下发给正在跑 bypass 的 A
+    expect(mocks.setPermissionMode).not.toHaveBeenCalled()
+    expect(policy.getPermissionMode('a')).toBe('bypassPermissions')
+    expect(policy.getPermissionMode('b')).toBe('plan')
   })
 
   it('deactivating marks the tab closed without touching other sessions', async () => {

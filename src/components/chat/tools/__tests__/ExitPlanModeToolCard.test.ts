@@ -9,12 +9,12 @@ import enUS from '@/i18n/locales/en-US'
 import zhCN from '@/i18n/locales/zh-CN'
 
 const storeMocks = vi.hoisted(() => ({
-  getPendingPermissionForToolUse: vi.fn(),
+  findPendingPermissionByToolUse: vi.fn(),
 }))
 
 vi.mock('@/stores/turn', () => ({
   useTurnStore: () => ({
-    getPendingPermissionForToolUse: storeMocks.getPendingPermissionForToolUse,
+    findPendingPermissionByToolUse: storeMocks.findPendingPermissionByToolUse,
   }),
 }))
 
@@ -92,7 +92,7 @@ describe('ExitPlanModeToolCard', () => {
     apiMocks.readFileAsBase64.mockResolvedValue(null)
     apiMocks.loadGuiSettings.mockResolvedValue({ success: false })
     apiMocks.getEnv.mockResolvedValue(undefined)
-    storeMocks.getPendingPermissionForToolUse.mockReturnValue(undefined)
+    storeMocks.findPendingPermissionByToolUse.mockReturnValue(undefined)
     vi.stubGlobal('requestAnimationFrame', (cb: FrameRequestCallback) =>
       window.setTimeout(() => cb(performance.now()), 0))
   })
@@ -138,7 +138,7 @@ describe('ExitPlanModeToolCard', () => {
   })
 
   it('stays silent while the approval card owns the plan body', async () => {
-    storeMocks.getPendingPermissionForToolUse.mockReturnValue({ requestId: 'req-1' })
+    storeMocks.findPendingPermissionByToolUse.mockReturnValue({ requestId: 'req-1' })
     const wrapper = await mountCard(makeToolCall({ status: 'running' }))
 
     expect(wrapper.text()).toContain('等待确认')
@@ -147,7 +147,7 @@ describe('ExitPlanModeToolCard', () => {
     await expand(wrapper)
 
     expect(wrapper.find('.plan-body').exists()).toBe(false)
-    expect(storeMocks.getPendingPermissionForToolUse).toHaveBeenCalledWith('tu-1')
+    expect(storeMocks.findPendingPermissionByToolUse).toHaveBeenCalledWith('tu-1')
   })
 
   it('offers no expand affordance when the plan is missing', async () => {

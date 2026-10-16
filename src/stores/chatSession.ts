@@ -491,8 +491,11 @@ export const useChatSessionStore = defineStore('chatSession', () => {
   const pendingInputText = ref<string>('')
 
   /**
-   * 对账后端 permission mode 与用户偏好：若不一致则下发用户偏好。
+   * 对账后端 permission mode 与**该会话自己**的模式：若不一致则下发会话模式。
    * 统一了 initClaudeCodeSession / selectSession / activateSession 三处的对账逻辑。
+   *
+   * 口径刻意不是「全局偏好」：多会话并发时，在会话 B 里切模式不得改写会话 A 正在跑的
+   * 模式（那会把 A 的实现中轮次推进 plan 模式，或反向把 A 提升到完全信任）。
    *
    * status.permissionMode 是宿主记下的**意图**，不代表引擎真跑在这个模式上 ——
    * 引擎在 system/init 里回报过不符（permissionModeVerified === false）时，即便意图
@@ -507,11 +510,12 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     if (!status?.permissionMode) return
     const { usePermissionPolicyStore } = await import('./permissionPolicy')
     const policyStore = usePermissionPolicyStore()
-    if (status.permissionMode === policyStore.currentPermissionMode && status.permissionModeVerified !== false) return
+    const intent = policyStore.getPermissionMode(sessionId)
+    if (status.permissionMode === intent && status.permissionModeVerified !== false) return
     try {
-      await api.claudeCode?.setPermissionMode?.(sessionId, policyStore.currentPermissionMode)
+      await api.claudeCode?.setPermissionMode?.(sessionId, intent)
     } catch (e) {
-      logger.warn('ChatStore', `${callerName}: failed to apply preferred mode | id=${sessionId.slice(0, 8)}`, { error: String(e) })
+      logger.warn('ChatStore', `${callerName}: failed to apply session mode | id=${sessionId.slice(0, 8)}`, { error: String(e) })
     }
   }
 
@@ -905,7 +909,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
       session.processStatus = 'starting'
       saveToStorage()
 
-      // 延迟导入获取 currentPermissionMode
+      // 延迟导入获取本会话的权限模式
       const { usePermissionPolicyStore } = await import('./permissionPolicy')
       const policyStore = usePermissionPolicyStore()
 
@@ -933,7 +937,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
         provider: config.provider,
         model: effectiveModel,
         effortLevel: config.effortLevel,
-        permissionMode: policyStore.currentPermissionMode,
+        permissionMode: policyStore.getPermissionMode(sessionId),
         agent: appliedAgent,
         thinkingEnabled: settingsStore.thinkingEnabled,
         engineType: desiredEngine,
@@ -2152,12 +2156,11 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     session.assistantId = assistant.name
     saveToStorage()
 
-    // 模式要在 createSession 之后下发: 那时 currentSessionId 才指向新会话. 否则控制请求
-    // 打到上一个会话的进程上, 超时后 permissionPolicy 还会把 UI 模式回滚.
+    // 助手自带的权限模式落在新会话自己身上（不再依赖 currentSessionId）。
     if (assistant.permission) {
       const { usePermissionPolicyStore } = await import('./permissionPolicy')
       const policyStore = usePermissionPolicyStore()
-      await policyStore.setPermissionMode(assistant.permission as any)
+      await policyStore.setPermissionMode(session.id, assistant.permission as any)
     }
 
     // 不在此处立即展开 Artifacts 面板：用户尚未发送消息、LLM 尚未生成产物。
@@ -2253,7 +2256,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     if (assistant.permission) {
       const { usePermissionPolicyStore } = await import('./permissionPolicy')
       const policyStore = usePermissionPolicyStore()
-      await policyStore.setPermissionMode(assistant.permission as any)
+      await policyStore.setPermissionMode(session.id, assistant.permission as any)
     }
   }
 

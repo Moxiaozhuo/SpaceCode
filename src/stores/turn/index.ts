@@ -714,6 +714,10 @@ export function useTurnStore(injectedApi?: any) {
       return !!getPendingPermissionForToolUse(toolUseId, sessionId)
     }
 
+    function findPendingPermissionByToolUse(toolUseId: string): PermissionRequest | undefined {
+      return permissionService.findPendingPermissionByToolUse(toolUseId)
+    }
+
     function consumePermissionFor(toolUseId: string, sessionId: string): PermissionRequest | undefined {
       return permissionService.consumePermissionFor(toolUseId, sessionId)
     }
@@ -1104,6 +1108,7 @@ export function useTurnStore(injectedApi?: any) {
       denyPermission,
       getPendingPermissionForToolUse,
       hasPendingPermissionForToolUse,
+      findPendingPermissionByToolUse,
       consumePermissionFor,
       getIsLoading,
       getStreamingContent,

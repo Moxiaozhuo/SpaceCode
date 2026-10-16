@@ -132,6 +132,7 @@
           <!-- 权限模式选择器 -->
           <PermissionModeSelector
             :model-value="permissionMode"
+            :session-id="editorSessionId"
             @update:model-value="(mode: PermissionMode) => emit('update:permissionMode', mode)"
           />
 
@@ -471,7 +472,7 @@ const props = withDefaults(defineProps<{
   compact?: boolean
   /** 'none' = 不读也不写会话草稿。弹窗等临时宿主用它可避免把宿主会话的草稿冲掉 */
   draftScope?: 'session' | 'none'
-  /** 受控权限模式：传入时选择器只 emit，不再读写全局 permissionPolicy store */
+  /** 受控权限模式：传入时选择器只 emit，不再读写本会话的权限模式 */
   permissionMode?: PermissionMode
   /** false = 不渲染右下角发送/优化提示词按钮（宿主自己提供提交入口时用） */
   showActions?: boolean

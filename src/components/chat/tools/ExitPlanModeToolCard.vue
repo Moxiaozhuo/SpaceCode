@@ -52,9 +52,10 @@ const planContent = computed(() => {
 })
 
 // 审批进行中时，PermissionRequestCard 已在同一位置展示整份计划正文；卡片必须让位，
-// 否则时间线里会出现两份相同的计划。
+// 否则时间线里会出现两份相同的计划。查询按全局唯一的 toolUseId 跨会话做，不回退
+// currentSessionId —— 多 pane 下这张卡片所属的会话可能并不是当前会话。
 const isAwaitingApproval = computed(
-  () => !!turnStore.getPendingPermissionForToolUse(props.toolCall.id),
+  () => !!turnStore.findPendingPermissionByToolUse(props.toolCall.id),
 )
 
 const canExpand = computed(() => !!planContent.value && !isAwaitingApproval.value)
