@@ -5,7 +5,7 @@
  * and syncing API config to Claude's settings.json.
  */
 import { ipcMain, app } from 'electron'
-import { join, dirname, resolve } from 'path'
+import { join, dirname, resolve, isAbsolute } from 'path'
 import { existsSync, readFileSync, writeFileSync, mkdirSync, chmodSync } from 'fs'
 import { debug, info, warn, error } from '../infra/logger'
 import { proxyManager, buildProxyConfigFromSettings } from '../infra/proxyManager'
@@ -198,19 +198,23 @@ function syncApiConfigToSettingsJson(guiSettingsJson: string): void {
 
 // ── Hooks settings ──────────────────────────────────────────────
 
-function getHooksSettingsPath(scope: string): string {
+/**
+ * project / local 的根必须由渲染进程显式传入：主进程没有"当前项目"的概念，
+ * 进程 cwd 是程序启动目录，与用户打开的项目无关（历史上的 `__projectCwd`
+ * 兜底从未被赋值，于是保存会写到启动目录并在里面凭空建出 .claude）。
+ * 返回 null 表示定位不了，调用方必须明确失败而不是换个地方写。
+ */
+function resolveHooksScopePath(scope: string, projectRoot: unknown): string | null {
   if (scope === 'user') {
     return getClaudeSettingsPath()
   }
-  const cwd = getProjectCwd()
-  if (scope === 'project') {
-    return join(cwd, '.claude', 'settings.json')
-  }
-  return join(cwd, '.claude', 'settings.local.json')
+  if (scope !== 'project' && scope !== 'local') return null
+  if (typeof projectRoot !== 'string' || !projectRoot || !isAbsolute(projectRoot)) return null
+  return join(projectRoot, '.claude', scope === 'project' ? 'settings.json' : 'settings.local.json')
 }
 
-function getProjectCwd(): string {
-  return (global as any).__projectCwd ?? process.cwd()
+function scopePathError(scope: string): string {
+  return `Cannot resolve project root for hooks scope "${scope}": an absolute projectRoot is required`
 }
 
 // ── IPC Registration ────────────────────────────────────────────
@@ -315,9 +319,14 @@ export function registerSettingsIPCHandlers(): void {
 
   // ── Hooks Settings ────────────────────────────────────────────
 
-  ipcMain.handle('settings:loadHooksSettings', async (_event, scope: string = 'user') => {
+  ipcMain.handle('settings:loadHooksSettings', async (_event, scope: string = 'user', projectRoot?: string) => {
     try {
-      const settingsPath = getHooksSettingsPath(scope)
+      const settingsPath = resolveHooksScopePath(scope, projectRoot)
+      if (!settingsPath) {
+        const message = scopePathError(scope)
+        warn('Settings', message)
+        return { success: false, data: null, error: message }
+      }
       if (!existsSync(settingsPath)) {
         return { success: true, data: '{}' }
       }
@@ -331,9 +340,14 @@ export function registerSettingsIPCHandlers(): void {
     }
   })
 
-  ipcMain.handle('settings:saveHooksSettings', async (_event, hooksJson: string, scope: string = 'user') => {
+  ipcMain.handle('settings:saveHooksSettings', async (_event, hooksJson: string, scope: string = 'user', projectRoot?: string) => {
     try {
-      const settingsPath = getHooksSettingsPath(scope)
+      const settingsPath = resolveHooksScopePath(scope, projectRoot)
+      if (!settingsPath) {
+        const message = scopePathError(scope)
+        warn('Settings', message)
+        return { success: false, error: message }
+      }
       let existingSettings: Record<string, unknown> = {}
 
       if (existsSync(settingsPath)) {

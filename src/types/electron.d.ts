@@ -455,8 +455,8 @@ export interface ElectronAPI {
   profilesSave: (data: string) => Promise<{ success: boolean; error?: string }>
   profilesBackupCorrupt: (data: string) => Promise<{ success: boolean; backupPath?: string; error?: string }>
 
-  loadHooksSettings: (scope?: string) => Promise<{ success: boolean; data: string | null; error?: string }>
-  saveHooksSettings: (hooksJson: string, scope?: string) => Promise<{ success: boolean; error?: string }>
+  loadHooksSettings: (scope?: string, projectRoot?: string) => Promise<{ success: boolean; data: string | null; error?: string }>
+  saveHooksSettings: (hooksJson: string, scope?: string, projectRoot?: string) => Promise<{ success: boolean; error?: string }>
   getBuiltinHooksRoot: () => Promise<{ success: boolean; path?: string; error?: string }>
   checkNode: () => Promise<{ success: boolean; version?: string; error?: string }>
 

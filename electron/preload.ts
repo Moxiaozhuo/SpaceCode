@@ -214,10 +214,11 @@ contextBridge.exposeInMainWorld('electronAPI', {
     ipcRenderer.invoke('profiles:backupCorrupt', data),
 
   // Hooks Settings persistence
-  loadHooksSettings: (scope?: string): Promise<{ success: boolean; data: string | null; error?: string }> =>
-    ipcRenderer.invoke('settings:loadHooksSettings', scope),
-  saveHooksSettings: (hooksJson: string, scope?: string): Promise<{ success: boolean; error?: string }> =>
-    ipcRenderer.invoke('settings:saveHooksSettings', hooksJson, scope),
+  // projectRoot 由渲染进程显式传入：project/local 的落点属于"当前打开的项目"，主进程无从得知
+  loadHooksSettings: (scope?: string, projectRoot?: string): Promise<{ success: boolean; data: string | null; error?: string }> =>
+    ipcRenderer.invoke('settings:loadHooksSettings', scope, projectRoot),
+  saveHooksSettings: (hooksJson: string, scope?: string, projectRoot?: string): Promise<{ success: boolean; error?: string }> =>
+    ipcRenderer.invoke('settings:saveHooksSettings', hooksJson, scope, projectRoot),
 
   // Builtin hooks
   getBuiltinHooksRoot: (): Promise<{ success: boolean; path?: string; error?: string }> =>
