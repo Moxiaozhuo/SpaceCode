@@ -9,7 +9,8 @@ import { SessionProcess, type SessionConfig } from '../sessionProcess'
  * source tree via bun — and a wrong pick here is an instant ENOENT at launch.
  *
  * The precedence the code implements (and that must not regress):
- *   1. installed CLI path wins outright when the caller supplied one
+ *   1. installed CLI path wins outright when the caller supplied one — on Windows a
+ *      `.cmd` shim is first swapped for the native exe it forwards to
  *   2. in dev, `bun run … src/entrypoints/cli.tsx` with macro defines, feature
  *      flags and an optional preload/.env
  *   3. packaged: the single-file `dist-desktop/cli.js` bundle, preferring the
@@ -26,7 +27,7 @@ vi.mock('fs', () => ({
   existsSync: (p: unknown) => exists.has(norm(String(p))),
   mkdirSync: vi.fn(),
   writeFileSync: vi.fn(),
-  readFileSync: () => '{}',
+  readFileSync: (p: unknown) => contents.get(norm(String(p))) ?? '{}',
   readdirSync: () => [],
   realpathSync: (p: unknown) => String(p),
   statSync: () => ({ isFile: () => true, size: 1_000_000 }),
@@ -72,6 +73,8 @@ vi.mock('../engineChildProcess', () => ({
 
 const norm = (p: string) => p.replace(/\\/g, '/')
 const exists = new Set<string>()
+const contents = new Map<string, string>()
+const originalPlatform = process.platform
 
 const SRC = norm(path.join('/engine-root', 'src/entrypoints/cli.tsx'))
 const PRELOAD = norm(path.join('/engine-root', 'preload.ts'))
@@ -94,12 +97,15 @@ const enabledFeatures = (args: string[]) =>
 beforeEach(() => {
   vi.clearAllMocks()
   exists.clear()
+  contents.clear()
   runtime.isPackaged = false
   bun.dev = 'bun'
   bun.packagedDesktop = null
 })
 
-afterEach(() => {})
+afterEach(() => {
+  Object.defineProperty(process, 'platform', { value: originalPlatform, configurable: true })
+})
 
 describe('resolveCliCommand — precedence', () => {
   it('short-circuits to an installed CLI path with no wrapper args', () => {
@@ -206,5 +212,73 @@ describe('resolveCliCommand — feature args', () => {
 
     expect(features).toContain('BUDDY')
     expect(features).not.toContain('CONTEXT_COLLAPSE')
+  })
+})
+
+/**
+ * On Windows the installed CLI is npm's `claude.cmd` shim, which can only be spawned
+ * through a shell — and a shell *concatenates* args without escaping them, so the
+ * multiline `--append-system-prompt` ends the command line at its first newline and
+ * every flag after it (`--session-id`, `--resume`, `--mcp-config`, `--thinking`) is
+ * silently dropped. The engine then opens a brand-new session on every spawn and no
+ * chat ever resumes its history. The shim's real `claude.exe` must be spawned directly.
+ */
+describe('resolveCliCommand — Windows .cmd launcher', () => {
+  const SHIM = 'C:\\tools\\npm\\claude.cmd'
+  const EXE = 'C:\\tools\\npm\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe'
+  const NPM_SHIM_BODY = [
+    '@ECHO off',
+    'GOTO start',
+    ':find_dp0',
+    'SET dp0=%~dp0',
+    'EXIT /b',
+    ':start',
+    'SETLOCAL',
+    'CALL :find_dp0',
+    `"%dp0%\\node_modules\\@anthropic-ai\\claude-code\\bin\\claude.exe"   %*`,
+    '',
+  ].join('\r\n')
+
+  function resolveInstalled(installedCliPath: string) {
+    Object.defineProperty(process, 'platform', { value: 'win32', configurable: true })
+    const proc = new SessionProcess('sess-win', {
+      cwd: '/tmp/ws',
+      engineSource: 'installed',
+      installedCliPath,
+    } as SessionConfig) as any
+    try {
+      return proc.resolveCliCommand()
+    } finally {
+      proc.removeAllListeners()
+    }
+  }
+
+  it('swaps the npm shim for the native exe it forwards to', () => {
+    exists.add(norm(SHIM))
+    exists.add(norm(EXE))
+    contents.set(norm(SHIM), NPM_SHIM_BODY)
+
+    expect(resolveInstalled(SHIM)).toEqual({ command: EXE, args: [] })
+  })
+
+  it('keeps the shim when the exe it forwards to is not actually on disk', () => {
+    exists.add(norm(SHIM))
+    contents.set(norm(SHIM), NPM_SHIM_BODY)
+
+    expect(resolveInstalled(SHIM)).toEqual({ command: SHIM, args: [] })
+  })
+
+  it('keeps the shim when its body does not forward to an exe', () => {
+    exists.add(norm(SHIM))
+    contents.set(norm(SHIM), '@ECHO off\r\nnode "%~dp0\\cli.js" %*\r\n')
+
+    expect(resolveInstalled(SHIM)).toEqual({ command: SHIM, args: [] })
+  })
+
+  it('does not touch a non-shim installed path', () => {
+    const exe = 'C:\\tools\\claude.exe'
+    exists.add(norm(exe))
+
+    expect(resolveInstalled(exe)).toEqual({ command: exe, args: [] })
   })
 })

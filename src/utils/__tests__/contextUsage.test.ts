@@ -163,7 +163,8 @@ describe('normalizeContextCategories', () => {
     expect(byName.get('MCP tools')).toBe(2000)
     expect(byName.get('Custom agents')).toBe(300)
     expect(byName.get('Skills')).toBe(400)
-    expect(byName.get('Messages')).toBe(500)
+    // Messages 明细 500，再并入缺口分摊后的余量（见下条用例的分摊演算）
+    expect(byName.get('Messages')).toBe(1660)
   })
 
   it('引擎给了 messageBreakdown 时缺口并进 Messages 且不标记估算', () => {
@@ -180,8 +181,8 @@ describe('normalizeContextCategories', () => {
       }),
     )
     const messages = categories.find(c => c.name === 'Messages')
-    // 明细 4000 + 固定开销分摊后剩余缺口（budget 18000 → 分摊 13640，余 26360）
-    expect(messages?.tokens).toBe(4000 + 26_360)
+    // 明细 4000 + 缺口 46000 经固定开销分摊(budget 18000 → 分摊 13640)后余 32360
+    expect(messages?.tokens).toBe(36_360)
     expect(messages?.isEstimated).toBeUndefined()
     // 估算的固定开销分类被标 isEstimated
     expect(categories.find(c => c.name === 'System prompt')?.isEstimated).toBe(true)
@@ -227,8 +228,8 @@ describe('normalizeContextCategories', () => {
         ],
       }),
     )
-    // 缺口 = 10000 - 1000(Free space 被排除) = 9000 → 进 Messages
-    expect(categories.find(c => c.name === 'Messages')?.tokens).toBe(1000 + 9000)
+    // 缺口 = 10000 - 1000(Free space 被排除) = 9000；经固定开销分摊余 1800 并进 Messages
+    expect(categories.find(c => c.name === 'Messages')?.tokens).toBe(1000 + 1800)
   })
 })
 
@@ -442,8 +443,8 @@ describe('buildFallbackSnapshot', () => {
       MODEL,
     )
     expect(snap.data?.totalTokens).toBe(850)
-    // sessionTotals 仍按顶层字段累计（apiCallUsage 不计入）
-    expect(snap.sessionTotals.inputTokens).toBe(9999)
+    // sessionTotals 累计所有消息的顶层 metadata.inputTokens（1000 + 9999）
+    expect(snap.sessionTotals.inputTokens).toBe(10_999)
     expect(snap.usedPercentage).toBe(0) // 850/200000 四舍五入为 0
   })
 

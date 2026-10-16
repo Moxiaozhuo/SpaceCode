@@ -166,6 +166,37 @@ export interface SDKMessage {
   [key: string]: any
 }
 
+const isWindowsCmdLauncher = (p: string): boolean =>
+  process.platform === 'win32' && /\.(cmd|bat)$/i.test(p)
+
+/**
+ * npm 装的 `claude.cmd` 不是可执行文件，只是把 `%*` 转发给同包里真正的 `claude.exe` 的壳。
+ * 跑它必须 shell:true（Node 对 .cmd 直接 spawn 会 EINVAL），而 shell 模式只**拼接**参数、
+ * 不做转义 —— `--append-system-prompt` 的值带换行，cmd.exe 在第一个换行处就认为命令行结束，
+ * 其后所有参数（--mcp-config / --thinking / --session-id / --resume）静默丢失。丢掉的正是
+ * 会话身份：每次 spawn 都开一个全新引擎会话，历史永远接不上。
+ * 所以先把壳里的 exe 真身解析出来直接跑（参数逐个传递）；解析不出再退回壳 + shell。
+ */
+function resolveCmdShimTarget(shimPath: string): string | null {
+  let text: string
+  try {
+    text = fs.readFileSync(shimPath, 'utf8')
+  } catch {
+    return null
+  }
+  // 显式用 win32 规则：本函数只在 Windows 路径上运行，测试却要能在任意平台判定。
+  const shimDir = path.win32.dirname(shimPath)
+  for (const line of text.split(/\r?\n/)) {
+    if (!line.includes('%*')) continue
+    const raw = line.match(/"([^"]*\.exe)"/i)?.[1] ?? line.match(/(\S+\.exe)/i)?.[1]
+    if (!raw) continue
+    // %~dp0 / %dp0% / %:dp0% 都指向壳所在目录（npm 的壳先 SET dp0=%~dp0 再用 %dp0%）。
+    const candidate = path.win32.resolve(shimDir, raw.replace(/%[~:]?dp0%?/gi, shimDir + '\\'))
+    if (fs.existsSync(candidate)) return candidate
+  }
+  return null
+}
+
 export class SessionProcess extends EventEmitter {
   readonly sessionId: string
   engineSessionId: string | null = null
@@ -376,6 +407,12 @@ export class SessionProcess extends EventEmitter {
       debug('SessionProcess', `[${this.sessionId.slice(0, 8)}] Process env keys=[${Object.keys(env).join(',')}] | provider=${this.config.provider} | model=${this.config.model}`)
 
       const useShell = process.platform === 'win32' && launch.command.toLowerCase().endsWith('.cmd')
+      if (useShell && args.some((a) => a.includes('\n'))) {
+        warn(
+          'SessionProcess',
+          `[${this.sessionId.slice(0, 8)}] Spawning a .cmd launcher through a shell with a multiline argument — cmd.exe ends the command line at the first newline, so every flag after it (--session-id / --resume included) is dropped`,
+        )
+      }
       const proc = spawn(launch.command, args, {
         cwd: this.config.cwd,
         env,
@@ -1817,8 +1854,14 @@ export class SessionProcess extends EventEmitter {
 
   private resolveCliCommand(): { command: string; args: string[]; launcherEnv?: Record<string, string> } {
     if (this.config.engineSource === 'installed' && this.config.installedCliPath) {
-      debug('SessionProcess', `[${this.sessionId.slice(0, 8)}] CLI resolved (installed): ${this.config.installedCliPath}`)
-      return { command: this.config.installedCliPath, args: [] }
+      const launcher = this.config.installedCliPath
+      const native = isWindowsCmdLauncher(launcher) ? resolveCmdShimTarget(launcher) : null
+      if (native) {
+        info('SessionProcess', `[${this.sessionId.slice(0, 8)}] Installed CLI launcher resolved to native exe | ${launcher} -> ${native}`)
+        return { command: native, args: [] }
+      }
+      debug('SessionProcess', `[${this.sessionId.slice(0, 8)}] CLI resolved (installed): ${launcher}`)
+      return { command: launcher, args: [] }
     }
 
     const isDev = !app.isPackaged

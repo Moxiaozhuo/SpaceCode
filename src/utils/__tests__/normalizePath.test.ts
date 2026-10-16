@@ -38,9 +38,12 @@ describe('normalizeAbsolutePath', () => {
     expect(normalizeAbsolutePath('D:\\foo\\')).toBe('D:\\foo')
   })
 
-  it('UNC 路径保留前导双反斜杠，其余折叠', () => {
-    expect(normalizeAbsolutePath('//server/share/dir')).toBe('\\\\server\\share\\dir')
+  it('UNC：仅反斜杠形式 \\server 走 UNC 分支保留前导双反斜杠', () => {
     expect(normalizeAbsolutePath('\\\\server\\\\share')).toBe('\\\\server\\share')
+  })
+
+  it('正斜杠开头的 //host 被当作 POSIX 路径折叠（不进 UNC 分支）', () => {
+    expect(normalizeAbsolutePath('//server/share/dir')).toBe('/server/share/dir')
   })
 
   it('首尾空白先裁剪再归一化', () => {
