@@ -6,7 +6,7 @@ import {
   MIN_OVERLAY_MAX_HEIGHT,
   OVERLAY_EDGE_MARGIN,
   placeAnchoredMenu,
-} from './menuPosition'
+} from '../menuPosition'
 
 describe('clampMenuPosition', () => {
   const VW = 1920

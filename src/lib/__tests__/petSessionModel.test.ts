@@ -8,7 +8,7 @@ import {
   resolvePetSessionStatus,
   type PetSessionActivity,
   type PetSessionInput,
-} from './petSessionModel'
+} from '../petSessionModel'
 
 function makeInput(overrides: Partial<PetSessionInput> = {}): PetSessionInput {
   return {

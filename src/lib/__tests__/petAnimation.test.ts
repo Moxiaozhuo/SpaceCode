@@ -22,7 +22,7 @@ import {
   quantizePetLookDirection,
   resolvePetLookFrame,
   type PetAnimationState,
-} from './petAnimation'
+} from '../petAnimation'
 
 describe('getPetAtlasFrame', () => {
   it('computes atlas coordinates from row and column', () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { resolveModelAliasForEngine, type ProviderModelSlots } from './engineModel'
+import { resolveModelAliasForEngine, type ProviderModelSlots } from '../engineModel'
 
 const slots: ProviderModelSlots = {
   haikuModel: 'glm-5.2',

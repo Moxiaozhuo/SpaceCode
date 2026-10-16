@@ -30,14 +30,14 @@ const api = vi.hoisted(() => ({
   restoreSession: vi.fn(async () => ({})),
 }))
 
-vi.mock('./h5ApiClient', () => ({
+vi.mock('../h5ApiClient', () => ({
   h5ApiClient: api,
   // h5WebSocketClient 从同一模块取连接配置，mock 需保持该导出存在
   getH5Config: vi.fn(() => null),
   isH5Mode: vi.fn(() => true),
 }))
 
-import { createH5Adapter } from './h5Adapter'
+import { createH5Adapter } from '../h5Adapter'
 
 describe('createH5Adapter', () => {
   beforeEach(() => {

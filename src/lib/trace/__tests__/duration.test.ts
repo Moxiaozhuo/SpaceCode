@@ -4,7 +4,7 @@ import {
   traceEventTimeRange,
   unionTraceDurationMs,
   type TraceDurationEvent,
-} from './duration'
+} from '../duration'
 
 // 键名兼容的实测依据（~/.claude/debug/traces 真实文件）：renderer 的 assistant_turn 一律写
 // metadata.duration，engine 的 result 一律写 metadata.durationMs，两者都是毫秒。

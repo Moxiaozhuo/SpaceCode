@@ -9,9 +9,9 @@
  * See: git.ts line 50 — `export const git: GitApi = { ...invokeApi, onStatusChanged }`
  */
 import { describe, it, expect, vi } from 'vitest'
-import { defineChannels, defineNamespace } from './channelMap'
-import { createRendererApi, createEventApi } from './rendererApi'
-import type { ChannelNamespace } from './channelMap'
+import { defineChannels, defineNamespace } from '../channelMap'
+import { createRendererApi, createEventApi } from '../rendererApi'
+import type { ChannelNamespace } from '../channelMap'
 
 // ── Test fixture: minimal channel map mirroring gitChannels ──────────────
 
@@ -23,7 +23,7 @@ const testChannels = defineChannels({
 })
 
 type TestChannelMap = typeof testChannels
-type TestRendererApi = import('./channelMap').DeriveRendererApi<TestChannelMap>
+type TestRendererApi = import('../channelMap').DeriveRendererApi<TestChannelMap>
 
 // ── Tests ─────────────────────────────────────────────────────────────────
 

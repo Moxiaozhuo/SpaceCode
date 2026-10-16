@@ -7,8 +7,8 @@
  *   返回的 unsubscribe 必须移除同一个 wrapper
  */
 import { describe, it, expect, vi } from 'vitest'
-import { createPreloadBridge, createEventBridge } from './preloadBridge'
-import { defineNamespace } from './channelMap'
+import { createPreloadBridge, createEventBridge } from '../preloadBridge'
+import { defineNamespace } from '../channelMap'
 
 function fakeIpcRenderer() {
   return {

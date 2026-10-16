@@ -9,7 +9,7 @@ import {
   resolveMarkdownMemoryLink,
   resolveMemoryFileTarget,
   stripMarkdownFrontmatter,
-} from './memoryFiles'
+} from '../memoryFiles'
 import type { MemoryFile, MemoryProject } from '@/types/memory'
 
 function file(path: string, extra: Partial<MemoryFile> = {}): MemoryFile {
