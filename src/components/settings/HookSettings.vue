@@ -329,8 +329,6 @@ function toggleExpand(id: string) {
 
 function switchScope(scope: HookScope) {
   store.activeScope = scope
-  // 作用域文件路径跟着当前项目根走，切换前重新上报一次
-  store.setProjectRoot(appStore.projectRoot || '')
   reloadHooks()
 }
 

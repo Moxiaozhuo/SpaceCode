@@ -186,15 +186,17 @@ export const useHooksStore = defineStore('hooks', () => {
     return items
   }
 
+  /** 面向用户的文案保持本地化；技术性原因（errno / 主进程提示）留给日志 */
   function notifyPersistFailure(reason?: string) {
+    if (reason) console.error('[HooksStore] Persistence failed:', reason)
     const noProject = activeScope.value !== 'user' && !projectRoot.value
     errorHandler.pushToast({
       id: generateId(),
       category: ErrorCategory.CONFIG_ERROR,
       title: i18n.global.t('hookSettings.title'),
-      message: noProject
-        ? i18n.global.t('hookSettings.noProjectRoot')
-        : i18n.global.t('hookSettings.persistFailed', { reason: reason ?? '' }),
+      message: i18n.global.t(
+        noProject ? 'hookSettings.noProjectRoot' : 'hookSettings.persistFailed',
+      ),
       autoDismiss: true,
       dismissAfter: 5000,
       createdAt: Date.now(),
@@ -232,7 +234,7 @@ export const useHooksStore = defineStore('hooks', () => {
           console.error('[HooksStore] Failed to migrate legacy hooks config:', mergeErr)
         }
       }
-    } catch (e: any) {
+    } catch (e) {
       console.error('[HooksStore] Failed to load from settings file:', e)
     } finally {
       loading.value = false
@@ -252,9 +254,9 @@ export const useHooksStore = defineStore('hooks', () => {
         return false
       }
       return true
-    } catch (e: any) {
+    } catch (e) {
       console.error('[HooksStore] Failed to save to settings file:', e)
-      notifyPersistFailure(e?.message)
+      notifyPersistFailure(e instanceof Error ? e.message : String(e))
       return false
     }
   }

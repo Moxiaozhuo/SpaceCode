@@ -434,6 +434,38 @@ describe('hooks store — loadFromSettingsFile 的容错与旧数据迁移', () 
     expect(apiMocks.saveHooksSettings).not.toHaveBeenCalled()
   })
 
+  // DEFECT: 载入失败时保留的是"上一个作用域"的列表，于是下一次保存把别的作用域的
+  // 条目写进当前作用域的文件。先于本次改动存在（旧代码同样在失败时不动列表），
+  // 本用例只钉现状，等拍板后再修 —— 修法是失败时清空或锁存列表。
+  it('DEFECT: 切作用域但读取失败后，保存会把另一个作用域的条目写进当前文件', async () => {
+    const store = useHooksStore()
+    store.setProjectRoot(ROOT_B)
+    store.activeScope = 'user'
+    apiMocks.loadHooksSettings.mockResolvedValue(engineJson({
+      Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo user' }] }],
+    }))
+    await store.loadFromSettingsFile()
+    expect(store.hooks.map(h => h.scope)).toEqual(['user'])
+
+    store.activeScope = 'project'
+    apiMocks.loadHooksSettings.mockResolvedValue({ success: false, data: null, error: 'disk boom' })
+    await store.loadFromSettingsFile()
+
+    await store.saveToSettingsFile()
+
+    // 用户级那条 Hook 被写进了项目文件
+    expect(apiMocks.saveHooksSettings).toHaveBeenCalledWith(
+      expect.stringContaining('"Stop"'), 'project', ROOT_B,
+    )
+    // 泄漏就此固化：项目文件里真有它了，重读时它变成一条项目级 Hook
+    apiMocks.loadHooksSettings.mockResolvedValue(engineJson({
+      Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo user' }] }],
+    }))
+    await store.loadFromSettingsFile()
+    expect(store.hooks.map(h => h.scope)).toEqual(['project'])
+    expect(metaOf('project', ROOT_B).map(h => h.command)).toEqual(['echo user'])
+  })
+
   it('JSON 非法时保持原列表并结束 loading', async () => {
     const store = useHooksStore()
     store.setProjectRoot(ROOT_B)

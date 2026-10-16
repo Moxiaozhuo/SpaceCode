@@ -198,11 +198,14 @@ function resolveHooksScopePath(scope: string, projectRoot: unknown): string | nu
   }
   if (scope !== 'project' && scope !== 'local') return null
   if (typeof projectRoot !== 'string' || !projectRoot || !isAbsolute(projectRoot)) return null
+  // 根必须真的存在：否则保存会在一个已失效的路径下凭空 mkdirSync 出 .claude，
+  // 用户看到"保存成功"，引擎却永远读不到它。
+  if (!existsSync(projectRoot)) return null
   return join(projectRoot, '.claude', scope === 'project' ? 'settings.json' : 'settings.local.json')
 }
 
 function scopePathError(scope: string): string {
-  return `Cannot resolve project root for hooks scope "${scope}": an absolute projectRoot is required`
+  return `Cannot resolve project root for hooks scope "${scope}": an existing absolute projectRoot is required`
 }
 
 // ── IPC Registration ────────────────────────────────────────────

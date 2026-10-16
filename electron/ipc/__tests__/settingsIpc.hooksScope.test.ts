@@ -14,13 +14,13 @@ import * as path from 'path'
 import * as os from 'os'
 
 const probe = vi.hoisted(() => ({
-  ipcHandlers: {} as Record<string, (...args: any[]) => any>,
+  ipcHandlers: {} as Record<string, (...args: unknown[]) => unknown>,
   home: '',
 }))
 
 vi.mock('electron', () => ({
   ipcMain: {
-    handle: vi.fn((channel: string, handler: (...args: any[]) => any) => {
+    handle: vi.fn((channel: string, handler: (...args: unknown[]) => unknown) => {
       probe.ipcHandlers[channel] = handler
     }),
     on: vi.fn(),
@@ -45,6 +45,12 @@ import { registerSettingsIPCHandlers } from '../settingsIpc'
 const HOOKS_JSON = JSON.stringify({
   Stop: [{ matcher: '*', hooks: [{ type: 'command', command: 'echo hi' }] }],
 })
+
+interface HooksResult { success: boolean; data?: string | null; error?: string }
+
+function callHooks(channel: 'settings:loadHooksSettings' | 'settings:saveHooksSettings', ...args: unknown[]): Promise<HooksResult> {
+  return Promise.resolve(probe.ipcHandlers[channel](undefined, ...args)) as Promise<HooksResult>
+}
 
 const tmpDirs: string[] = []
 const originalCwd = process.cwd()
@@ -83,7 +89,7 @@ function projectSettings(scope: 'project' | 'local', root: string): string {
 
 describe('settings hooks scope path', () => {
   it('scope=project 写入显式项目根，启动目录下不产生任何文件', async () => {
-    const res = await probe.ipcHandlers['settings:saveHooksSettings'](null, HOOKS_JSON, 'project', dirB)
+    const res = await callHooks('settings:saveHooksSettings', HOOKS_JSON, 'project', dirB)
 
     expect(res).toEqual({ success: true })
     const written = JSON.parse(fs.readFileSync(projectSettings('project', dirB), 'utf-8'))
@@ -92,7 +98,7 @@ describe('settings hooks scope path', () => {
   })
 
   it('scope=local 写入项目根下的 settings.local.json', async () => {
-    const res = await probe.ipcHandlers['settings:saveHooksSettings'](null, HOOKS_JSON, 'local', dirB)
+    const res = await callHooks('settings:saveHooksSettings', HOOKS_JSON, 'local', dirB)
 
     expect(res).toEqual({ success: true })
     expect(fs.existsSync(projectSettings('local', dirB))).toBe(true)
@@ -107,7 +113,7 @@ describe('settings hooks scope path', () => {
       'utf-8',
     )
 
-    await probe.ipcHandlers['settings:saveHooksSettings'](null, HOOKS_JSON, 'project', dirB)
+    await callHooks('settings:saveHooksSettings', HOOKS_JSON, 'project', dirB)
 
     const written = JSON.parse(fs.readFileSync(projectSettings('project', dirB), 'utf-8'))
     expect(written.permissions).toEqual({ allow: ['Bash'] })
@@ -115,7 +121,7 @@ describe('settings hooks scope path', () => {
   })
 
   it('scope=user 用用户主目录，不需要项目根', async () => {
-    const res = await probe.ipcHandlers['settings:saveHooksSettings'](null, HOOKS_JSON, 'user', '')
+    const res = await callHooks('settings:saveHooksSettings', HOOKS_JSON, 'user', '')
 
     expect(res).toEqual({ success: true })
     const userPath = path.join(probe.home, '.claude', 'settings.json')
@@ -125,7 +131,7 @@ describe('settings hooks scope path', () => {
 
   it('缺少项目根时 project/local 明确失败且不写盘', async () => {
     for (const scope of ['project', 'local'] as const) {
-      const res = await probe.ipcHandlers['settings:saveHooksSettings'](null, HOOKS_JSON, scope, '')
+      const res = await callHooks('settings:saveHooksSettings', HOOKS_JSON, scope, '')
 
       expect(res.success).toBe(false)
       expect(res.error).toBeTruthy()
@@ -135,11 +141,23 @@ describe('settings hooks scope path', () => {
   })
 
   it('拒绝相对项目根，避免落到进程 cwd', async () => {
-    const res = await probe.ipcHandlers['settings:saveHooksSettings'](null, HOOKS_JSON, 'project', 'relative/dir')
+    const res = await callHooks('settings:saveHooksSettings', HOOKS_JSON, 'project', 'relative/dir')
 
     expect(res.success).toBe(false)
     expect(fs.existsSync(path.join(dirA, '.claude'))).toBe(false)
     expect(fs.existsSync(path.join(dirA, 'relative'))).toBe(false)
+  })
+
+  it('项目根已失效（目录不存在）时保存与读取都明确失败，不凭空造出目录树', async () => {
+    const stale = path.join(dirB, 'project-was-deleted')
+
+    const saved = await callHooks('settings:saveHooksSettings', HOOKS_JSON, 'project', stale)
+    const loaded = await callHooks('settings:loadHooksSettings', 'project', stale)
+
+    expect(saved.success).toBe(false)
+    expect(saved.error).toBeTruthy()
+    expect(loaded.success).toBe(false)
+    expect(fs.existsSync(stale)).toBe(false)
   })
 
   it('load 从显式项目根读取，而不是启动目录', async () => {
@@ -152,7 +170,7 @@ describe('settings hooks scope path', () => {
       'utf-8',
     )
 
-    const res = await probe.ipcHandlers['settings:loadHooksSettings'](null, 'project', dirB)
+    const res = await callHooks('settings:loadHooksSettings', 'project', dirB)
 
     expect(res.success).toBe(true)
     expect(res.data).toContain('echo hi')
@@ -160,7 +178,7 @@ describe('settings hooks scope path', () => {
   })
 
   it('load 在缺少项目根时明确失败', async () => {
-    const res = await probe.ipcHandlers['settings:loadHooksSettings'](null, 'local', '')
+    const res = await callHooks('settings:loadHooksSettings', 'local', '')
 
     expect(res.success).toBe(false)
     expect(res.error).toBeTruthy()
