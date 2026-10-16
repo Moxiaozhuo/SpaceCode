@@ -42,6 +42,7 @@
     "prebuild:officecli": "node scripts/download-officecli.mjs",
     "typecheck": "vue-tsc --noEmit",
     "test": "vitest run",
+    "test:changed": "vitest run --changed",
     "test:coverage": "vitest run --coverage",
     "changelog": "conventional-changelog -p conventionalcommits -i CHANGELOG.md -s",
     "changelog:all": "conventional-changelog -p conventionalcommits -i CHANGELOG.md -s -r 0",
