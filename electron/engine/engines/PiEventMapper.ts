@@ -10,16 +10,18 @@ export function mapPiEvent(sessionId: string, event: PiAgentEvent): UnifiedEngin
     case 'agent_start':
       return { sessionId, type: 'system', data: { subtype: 'agent_start' } }
 
-    case 'agent_end':
+    case 'agent_end': {
+      // Pi 的上游拒绝（403/429 等）只写在最后一条 assistant 消息的 stopReason/errorMessage
+      // 上，agent_end 帧本身不标错 —— 不读它就等于报"成功的空结果"，真原因被兜底文案取代。
+      const last = findLastAssistant(event.messages)
       return {
         sessionId,
         type: 'result',
-        data: {
-          result: extractFinalText(event.messages),
-          stop_reason: 'end_turn',
-          messages: event.messages,
-        },
+        data: last?.stopReason === 'error'
+          ? { result: last?.errorMessage || '', is_error: true, stop_reason: 'error', messages: event.messages }
+          : { result: extractFinalText(event.messages), stop_reason: 'end_turn', messages: event.messages },
       }
+    }
 
     case 'turn_start':
       return null
@@ -184,14 +186,23 @@ function mapAssistantMessage(msg: any): any {
   }
 }
 
-function extractFinalText(messages: any[]): string {
-  if (!Array.isArray(messages)) return ''
-  const lastAssistant = [...messages].reverse().find((m: any) => m.role === 'assistant')
-  if (!lastAssistant) return ''
-  const content = lastAssistant.content
+interface PiAssistantMessage {
+  role?: string
+  content?: string | Array<{ type?: string; text?: string }>
+  stopReason?: string
+  errorMessage?: string
+}
+
+function findLastAssistant(messages: unknown): PiAssistantMessage | undefined {
+  if (!Array.isArray(messages)) return undefined
+  return [...messages].reverse().find((m: PiAssistantMessage) => m?.role === 'assistant')
+}
+
+function extractFinalText(messages: unknown): string {
+  const content = findLastAssistant(messages)?.content
   if (typeof content === 'string') return content
   if (Array.isArray(content)) {
-    const textBlock = content.find((c: any) => c.type === 'text')
+    const textBlock = content.find((c) => c?.type === 'text')
     return textBlock?.text || ''
   }
   return ''

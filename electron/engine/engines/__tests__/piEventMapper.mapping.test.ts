@@ -13,7 +13,8 @@ import { mapPiEvent } from '../PiEventMapper'
  *    渲染层按 Anthropic content block 形状消费，字段名错一个就静默丢文本；
  *    text/thinking 的取值优先 `delta` 字段，回退到 `text`/`thinking` 旧字段。
  *  - agent_end 的 result 提取规则：最后一条 assistant 消息的文本（string 直取 /
- *    块数组取第一个 text 块），取不到时为空串而不是 undefined。
+ *    块数组取第一个 text 块），取不到时为空串而不是 undefined。该消息 stopReason
+ *    为 'error' 时改产 is_error:true + errorMessage 原文（Pi 的上游拒绝只写在那里）。
  *  - message_start 对 user 消息原样透传，对 assistant 消息做白名单裁剪
  *    （仅 role/content/model/usage）；message_end 不为 user 消息发事件（与
  *    message_start 不对称，user 帧的入口只有 message_start）。
@@ -72,6 +73,54 @@ describe('mapPiEvent — 生命周期与消息事件', () => {
     expect(noAssistant?.data.result).toBe('')
     expect(notArray?.data.result).toBe('')
     expect(noTextBlock?.data.result).toBe('')
+  })
+
+  // Pi 把上游拒绝写在最后一条 assistant 消息上（stopReason/errorMessage），agent_end
+  // 帧本身不带错误标记。不透传就成了"成功的空结果"，渲染进程只剩笼统的 empty response
+  // 文案，403 这类真原因全部丢失（cron 的执行记录同样看不到）。
+  it('最后一条 assistant 报 error → result 标成失败并带上 errorMessage 原文', () => {
+    const messages = [
+      { role: 'user', content: 'hi' },
+      {
+        role: 'assistant',
+        content: [],
+        provider: 'openai-compat',
+        model: 'deepseek-v4.1-flash',
+        stopReason: 'error',
+        errorMessage: '403 model is not available in the current token plan',
+      },
+    ]
+    expect(mapPiEvent(SID, { type: 'agent_end', messages })).toEqual({
+      sessionId: SID,
+      type: 'result',
+      data: {
+        result: '403 model is not available in the current token plan',
+        is_error: true,
+        stop_reason: 'error',
+        messages,
+      },
+    })
+  })
+
+  it('errorMessage 缺失也算失败，文本留空由消费方兜底', () => {
+    const event = mapPiEvent(SID, {
+      type: 'agent_end',
+      messages: [{ role: 'assistant', content: [], stopReason: 'error' }],
+    })
+    expect(event?.data).toMatchObject({ is_error: true, stop_reason: 'error' })
+    expect(event?.data.result).toBe('')
+  })
+
+  it('中途失败但收尾成功的一轮不算失败', () => {
+    const event = mapPiEvent(SID, {
+      type: 'agent_end',
+      messages: [
+        { role: 'assistant', content: [], stopReason: 'error', errorMessage: '429 slow down' },
+        { role: 'assistant', content: '重试后答上了', stopReason: 'stop' },
+      ],
+    })
+    expect(event?.data).toMatchObject({ result: '重试后答上了', stop_reason: 'end_turn' })
+    expect(event?.data.is_error).toBeUndefined()
   })
 
   it('message_start assistant → assistant 事件，message 白名单仅 role/content/model/usage', () => {
