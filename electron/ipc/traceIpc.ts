@@ -10,6 +10,7 @@ import {
   readTraceEvents,
   getTraceDir,
 } from '../infra/logger'
+import { mergeTraceDurationMs, readTraceEventDurationMs, traceEventTimeRange } from '@/utils/traceDuration'
 
 type AgentTraceEventForTrace = {
   id?: string
@@ -38,13 +39,10 @@ function eventToCallRecord(e: AgentTraceEventForTrace): Record<string, unknown> 
   const usage = e.metadata?.usage as Record<string, unknown> | undefined
   const inputTokens = (usage?.inputTokens as number) || 0
   const outputTokens = (usage?.outputTokens as number) || 0
-  const durationMs = e.metadata?.durationMs as number | undefined
+  const durationMs = readTraceEventDurationMs(e.metadata)
   const model = (e.metadata?.model as string) || e.metadata?.modelId as string | undefined
-  const startedAt = e.timestamp || new Date().toISOString()
-  let completedAt: string | undefined
-  if (durationMs && e.timestamp) {
-    completedAt = new Date(new Date(e.timestamp).getTime() + durationMs).toISOString()
-  }
+  // 耗时事件都在回合结束时落盘，所以 e.timestamp 是结束时间，开始时间用耗时反推。
+  const { startedAt, completedAt } = traceEventTimeRange(e.timestamp, durationMs)
   const callStatus = e.status === 'failed' ? 'error' : e.status === 'running' || e.status === 'started' ? 'pending' : 'ok'
   const inputPreview = typeof e.input === 'string' ? e.input : JSON.stringify(e.input ?? '')
   const outputPreview = typeof e.output === 'string' ? e.output : JSON.stringify(e.output ?? '')
@@ -92,15 +90,16 @@ function eventToEventRecord(e: AgentTraceEventForTrace): Record<string, unknown>
 }
 
 function buildTraceSummary(calls: Record<string, unknown>[], events: AgentTraceEventForTrace[]): Record<string, unknown> {
+  // apiCalls 与 token 数是 turn 级事件推算出来的，不是真实请求级计数：一次回合可能含多次
+  // API 请求，且没有任何写入方给 trace 事件写 metadata.usage，所以 token 恒为 0。
+  // 需要精确计数得先补请求级 trace 事件（#41 拆分票 16 明确划到票外）。
   const apiCalls = calls.length
   const failedCalls = calls.filter(c => c.status === 'error').length
-  let totalDurationMs = 0
+  const totalDurationMs = mergeTraceDurationMs(events)
   let totalInputTokens = 0
   let totalOutputTokens = 0
   const modelCounts = new Map<string, number>()
   for (const call of calls) {
-    const d = call.durationMs as number | undefined
-    if (d) totalDurationMs += d
     const usage = call.usage as { inputTokens?: number; outputTokens?: number } | undefined
     if (usage) {
       totalInputTokens += usage.inputTokens || 0

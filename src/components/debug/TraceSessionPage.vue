@@ -216,8 +216,10 @@ const displayTitle = computed(() => {
 })
 
 const totalDuration = computed(() => {
-  const root = viewModel.value?.spansById.get(rootId)
-  return root?.durationMs ? formatDurationMs(root.durationMs) : ''
+  // 执行时长合计（回合去重累加），与主进程 summary.totalDurationMs 同口径；
+  // root span 的 durationMs 是首尾事件墙钟，含空闲，不适合当"总时长"展示。
+  const total = viewModel.value?.totalDurationMs ?? 0
+  return total > 0 ? formatDurationMs(total) : ''
 })
 
 const selectedSpan = computed(() => {

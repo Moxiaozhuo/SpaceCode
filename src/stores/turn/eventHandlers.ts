@@ -1167,7 +1167,7 @@ export function createEventHandlers(opts: EventReducerOptions): EventReducer {
           title: 'Assistant turn completed',
           output: { content: msg.content },
           metadata: {
-            duration: msg.metadata?.duration,
+            durationMs: msg.metadata?.duration,
             model: msg.metadata?.model,
             stopReason: result.stop_reason || '',
             warning: msg.metadata?.warning || '',
@@ -1386,6 +1386,8 @@ export function createEventHandlers(opts: EventReducerOptions): EventReducer {
       phase: 'stream',
     })
 
+    const failedDurationMs = Date.now() - ts.sendStartTime
+
     traceEvent({
       sessionId,
       messageId: ts.assistantMessageId,
@@ -1394,13 +1396,14 @@ export function createEventHandlers(opts: EventReducerOptions): EventReducer {
       status: 'failed',
       title: hadRetry ? 'Assistant turn failed (retries exhausted)' : 'Assistant turn failed',
       error: { message: classified.technicalDetail },
+      metadata: { durationMs: failedDurationMs },
     })
 
     sink.patchMessage(sessionId, ts.assistantMessageId, {
       content: classified.message,
       metadata: {
         model: ts.model || getModel(),
-        duration: Date.now() - ts.sendStartTime,
+        duration: failedDurationMs,
         error: classified,
       }
     })
