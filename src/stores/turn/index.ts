@@ -622,6 +622,10 @@ export function useTurnStore(injectedApi?: any) {
         if (ts && !ts.settled) {
           ts.settled = true
           ts.resolve?.()
+          // 中止的回合不走 result 事件：未结束的 thinking 必须在此收口
+          // （事件状态 + msg.reasoning.endTime），否则思考卡片永远转圈，
+          // 且下面 persist 出去的存档也带着 running 状态。
+          timelineAssembler.completeCurrentReasoningEvent(sid, ts)
           endTurn(sid, ts)
           const s = sink.get(sid)
           if (s) {
