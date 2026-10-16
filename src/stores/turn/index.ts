@@ -745,10 +745,19 @@ export function useTurnStore(injectedApi?: any) {
       }
       sessionStore.logger.info('ChatStore', `allowPermission | sessionId=${sid.slice(0, 8)} | tool=${req.toolName} | requestId=${req.requestId.slice(0, 8)} | class=${decisionClassification || '(none)'} | perms=${updatedPermissions?.length ?? 0}`)
       try {
+        // 两个参数都要过一遍 JSON 往返：Pinia 的 store 是 reactive 的，动作返回值会被 Vue
+        // 的 getter 深度包成 Proxy，而 Electron 的 IPC 序列化器遇到 Proxy 直接抛
+        // "An object could not be cloned"。updatedInput 一直这么做，updatedPermissions 同理。
         const safeInput = JSON.parse(JSON.stringify(updatedInput)) as Record<string, unknown>
-        await claudeCode.allowPermission(sid, req.requestId, safeInput, decisionClassification, updatedPermissions)
+        const safePermissions = updatedPermissions
+          ? (JSON.parse(JSON.stringify(updatedPermissions)) as PermissionUpdate[])
+          : undefined
+        await claudeCode.allowPermission(sid, req.requestId, safeInput, decisionClassification, safePermissions)
         sink.patchToolCall(sid, messageId, toolUseId, 'completed')
       } catch (error) {
+        // consume 已经把条目摘掉，不塞回去的话重试只会得到 "no pending request"，
+        // 引擎则永远等不到这次 control_response，整个会话卡在正在写入上。
+        permissionService.addPermissionRequest(sid, req)
         sessionStore.logger.error('ChatStore', 'allowPermission failed', { error: String(error) })
         throw error
       }
