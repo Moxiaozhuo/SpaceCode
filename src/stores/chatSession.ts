@@ -8,6 +8,7 @@ import { useSettingsStore } from './settings'
 import { useAppStore } from './app'
 import { useTaskManager } from '@/composables/useTaskManager'
 import { findUserMessageForCheckpoint, getCompletedTurnTargets } from '@/utils/turnCheckpointUtils'
+import { resolveModelAliasForEngine } from '@/utils/engineModel'
 import { syncTaskStateFromToolCall } from '@/utils/taskToolSync'
 import { api } from '@/services/electronAPI'
 import { errorHandler } from '@/services/errorHandler'
@@ -1980,22 +1981,16 @@ export const useChatSessionStore = defineStore('chatSession', () => {
   }
 
   /**
-   * 将实际模型名映射回 claude-code 的别名 (haiku/sonnet/opus)。
+   * 按引擎解析要交给 config.model 的值：claude-code 把实际模型名映射回别名
+   * (haiku/sonnet/opus)，pi 保留真名。规则见 src/utils/engineModel，与定时任务同源。
    *
-   * config.model 总是 sonnetModel 的值（如 deepseek-v4-pro）。
-   * 引擎的 --model 参数需要别名（如 'sonnet'）才能通过 parseUserSpecifiedModel
-   * 解析到 ANTHROPIC_DEFAULT_SONNET_MODEL 环境变量配置的实际模型。
+   * claude-code 的 --model 参数和 set_model control_request 都靠别名解析机制
+   * （parseUserSpecifiedModel → getDefault*Model）读 ANTHROPIC_DEFAULT_*_MODEL
+   * 环境变量路由到用户配置的实际模型；直接传实际模型名会绕过此机制。
    */
   function resolveModelAliasFromConfig(modelValue: string | undefined): string | undefined {
     if (!modelValue) return undefined
-    const providerConfig = getActiveProviderSlotConfig()
-    if (!providerConfig) return modelValue
-
-    if (providerConfig.haikuModel && providerConfig.haikuModel === modelValue) return 'haiku'
-    if (providerConfig.sonnetModel && providerConfig.sonnetModel === modelValue) return 'sonnet'
-    if (providerConfig.opusModel && providerConfig.opusModel === modelValue) return 'opus'
-
-    return modelValue
+    return resolveModelAliasForEngine(modelValue, getActiveProviderSlotConfig(), settingsStore.engineType)
   }
 
   /** 当前 authMethod 对应的 haiku/sonnet/opus 槽位配置 */

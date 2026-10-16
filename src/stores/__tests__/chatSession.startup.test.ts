@@ -193,6 +193,26 @@ describe('chat session startup', () => {
     }))
   })
 
+  it('pi 引擎的普通会话同样保留真实模型 id，与定时任务共用一条规则', async () => {
+    const { useSettingsStore } = await import('../settings')
+    const settings = useSettingsStore()
+    settings.authMethod = 'anthropic_compatible'
+    settings.anthropicConfig = { baseUrl: 'https://api.example/v1', apiKey: 'test-key', haikuModel: '', sonnetModel: 'kimi-k3', opusModel: '' }
+    settings.engineType = 'pi'
+    const { useChatSessionStore } = await import('../chatSession')
+    const store = useChatSessionStore()
+    const session = store.createSession('Test', 'D:/repo', 'pi-engine')
+    mocks.getSessionStatus.mockResolvedValue({ isRunning: false })
+
+    await store.initClaudeCodeSession(session.id)
+
+    // Pi 的 --model 直接给上游，'sonnet' 在它眼里是个不存在的模型
+    expect(mocks.startSession).toHaveBeenCalledWith(session.id, expect.objectContaining({
+      engineType: 'pi',
+      model: 'kimi-k3',
+    }))
+  })
+
   it('设置页高级配置里的上下文窗口（modelCapabilities）同样送达引擎', async () => {
     const { useSettingsStore } = await import('../settings')
     const settings = useSettingsStore()
