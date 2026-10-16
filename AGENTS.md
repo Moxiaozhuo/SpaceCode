@@ -77,7 +77,7 @@ npm run build         # vue-tsc --noEmit + vite build (已含类型检查)
 日常迭代用 `test:changed` 快速验证; 以下情况必须全量 `npm run test`:
 
 - 提交前 / 收尾前 (CI 只认全量)
-- 改动横切面广: `vitest.config.ts`、`src/shared/`、`src/utils/`、全局类型、i18n locales
+- 改动横切面广: `vitest.config.ts`、`package.json` (依赖变更会命中 forceRerunTriggers 强制全量)、`src/shared/`、`src/utils/`、全局类型、i18n locales
 - `test:changed` 显示 0 个受影响测试, 但改动可能通过动态 import / 运行时路径影响其他模块
 
 任一失败则修复后重新执行.
