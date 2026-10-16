@@ -10,8 +10,9 @@ vi.mock('vue-i18n', () => ({
 }))
 
 // 用 vi.hoisted 声明 spy，避免 vi.mock 工厂 hoisting 限制，便于测试中显式断言
-const { sendMessageSpy } = vi.hoisted(() => ({
+const { sendMessageSpy, stopEngineSpy } = vi.hoisted(() => ({
   sendMessageSpy: vi.fn().mockResolvedValue(undefined),
+  stopEngineSpy: vi.fn(),
 }))
 
 vi.mock('@/services/electronAPI', () => ({
@@ -25,7 +26,7 @@ vi.mock('@/services/electronAPI', () => ({
     claudeCode: {
       onStreamEvent: vi.fn(() => () => {}),
       sendMessage: vi.fn(),
-      stop: vi.fn(),
+      stop: stopEngineSpy,
       // 补充：initClaudeCodeSession 内部会调用 getSessionStatus 判断会话是否运行
       getSessionStatus: vi.fn().mockResolvedValue({ isRunning: false }),
     },
@@ -59,6 +60,11 @@ const storeState = vi.hoisted(() => {
     } else {
       session.processStatus = 'exited'
     }
+  })
+  // 镜像「只有空会话能换工作目录」这条契约，真实实现由 chatSession.sessions.test.ts 钉死
+  state.canSwitchWorkingDirectory = vi.fn((sid: string | null) => {
+    const session = state.sessions.find((s: any) => s.id === sid)
+    return session ? session.messages.length === 0 : true
   })
   return state
 })
@@ -219,6 +225,24 @@ describe('useDesignSession', () => {
     expect(design.designWorkspace).toBe('/tmp/old')
     expect(chat.currentProjectRoot).toBe('/tmp/old')
     expect(session.workingDirectory).toBe('/tmp/old')
+    expect(chat.initClaudeCodeSession).not.toHaveBeenCalled()
+    expect(errorHandler.toasts.value).toHaveLength(0)
+  })
+
+  it('switchWorkingDirectory 在会话已有消息时直接拒绝，不停引擎也不提示失败', async () => {
+    const design = useDesignStore()
+    const chat = useChatSessionStore()
+    const session = setupDesignSession('/tmp/old')
+    session.messages.push({ id: 'm1', role: 'user', content: 'hi', timestamp: 1 })
+    const { switchWorkingDirectory } = useDesignSession()
+
+    await switchWorkingDirectory('/tmp/new')
+
+    expect(design.designWorkspace).toBe('/tmp/old')
+    expect(chat.currentProjectRoot).toBe('/tmp/old')
+    expect(session.workingDirectory).toBe('/tmp/old')
+    // 锁定不是失败：引擎没被停、也没弹"切换失败"，UI 侧由置灰入口解释原因
+    expect(stopEngineSpy).not.toHaveBeenCalled()
     expect(chat.initClaudeCodeSession).not.toHaveBeenCalled()
     expect(errorHandler.toasts.value).toHaveLength(0)
   })

@@ -4,8 +4,10 @@
       type="button"
       class="working-dir-picker"
       data-testid="working-dir-trigger"
-      :title="modelValue || t('design.workingDirectory.none')"
+      :class="{ 'is-locked': locked }"
+      :title="locked ? t('design.workingDirectory.locked') : (modelValue || t('design.workingDirectory.none'))"
       :aria-expanded="open"
+      :aria-disabled="locked || undefined"
       @click="toggleOpen"
     >
       <Folder :size="15" />
@@ -86,7 +88,7 @@ import { ChevronDown, ChevronRight, Folder, History, X } from 'lucide-vue-next'
 import { api } from '@/services/electronAPI'
 import { getRecentProjectRoots, recordRecentProjectRoot, pathsEqual } from '@/utils/recentProjectRoots'
 
-const props = defineProps<{ modelValue: string }>()
+const props = defineProps<{ modelValue: string; locked?: boolean }>()
 const emit = defineEmits<{ (e: 'update:modelValue', path: string): void }>()
 
 const { t } = useI18n()
@@ -113,6 +115,7 @@ function loadRecentDirs() {
 }
 
 function toggleOpen() {
+  if (props.locked) return
   open.value = !open.value
   if (open.value) loadRecentDirs()
 }
@@ -186,6 +189,12 @@ onUnmounted(() => {
     background var(--transition-fast),
     border-color var(--transition-fast),
     color var(--transition-fast);
+}
+
+/* 锁定态仍要接收 hover，否则 title 提示出不来 —— 所以用 aria-disabled 而非 disabled */
+.working-dir-picker.is-locked {
+  cursor: not-allowed;
+  opacity: 0.55;
 }
 
 .working-dir-picker:hover,

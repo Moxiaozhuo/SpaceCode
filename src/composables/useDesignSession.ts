@@ -97,25 +97,26 @@ export function useDesignSession() {
     // picker 的「清除」传空串：会话级没有合法的空 cwd —— 引擎必须跑在某个目录里，
     // 回滚判定也无从成立。保持当前目录不变，而不是把会话清成无目录状态。
     if (!path) return
+    const sid = designStore.activeSessionId
+    // 发过消息的会话锁死工作目录：引擎的历史 JSONL 按项目目录存放，换目录后
+    // --resume 在新目录下找不到旧 jsonl，必然丢上下文。UI 已置灰入口，这里是
+    // 唯一写入口，兜住 picker 之外的调用方（ChatContextToolbar 也直调本函数）。
+    if (!chatSessionStore.canSwitchWorkingDirectory(sid)) return
     const previousWorkspace = designStore.designWorkspace
     const previousProjectRoot = chatSessionStore.currentProjectRoot
     designStore.designWorkspace = path
     chatSessionStore.currentProjectRoot = path
-    const sid = designStore.activeSessionId
     if (!sid) return
 
     try {
       // cwd 不在 initClaudeCodeSession 的启动配置对账范围内（只对比 systemPrompt / agent / 凭据），
       // 换工作目录必须显式先停止会话，再以新 cwd 重新初始化。
+      // 不把 engineSessionId 交接给 _resumeSessionId：能走到这里的只有空会话，
+      // 它没有历史要保，而旧项目目录的 jsonl 在新 cwd 下 resume 不回来。
       if (api.claudeCode) {
         try {
           const status = await api.claudeCode.getSessionStatus(sid)
-          if (status?.isRunning) {
-            const resumeId = (status.engineSessionId as string) || undefined
-            await api.claudeCode.stop(sid)
-            const session = chatSessionStore.sessions.find(s => s.id === sid)
-            if (session && resumeId) session._resumeSessionId = resumeId
-          }
+          if (status?.isRunning) await api.claudeCode.stop(sid)
         } catch (e) {
           console.error('Failed to stop session before switching working directory:', e)
         }

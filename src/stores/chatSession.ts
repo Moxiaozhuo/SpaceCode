@@ -575,6 +575,18 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     return getSession(sessionId)?.workingDirectory || currentProjectRoot.value || ''
   }
 
+  /**
+   * 会话的工作目录只在它还是空会话时可换。引擎的 JSONL 按项目目录存放
+   * （~/.claude/projects/&lt;sanitized-cwd&gt;/&lt;sessionId&gt;.jsonl），一旦有过消息，
+   * 历史记录就落在旧项目目录下，换目录等于把会话挪到引擎找不到的项目里 —— 丢上下文。
+   * 尚未创建会话（sid 为空或查不到）算可换：那就是新会话。
+   */
+  function canSwitchWorkingDirectory(sessionId: string | null | undefined): boolean {
+    const session = getSession(sessionId)
+    if (!session) return true
+    return session.messages.length === 0
+  }
+
   function getTeamContext(sessionId: string | null | undefined) {
     return getSession(sessionId)?.teamContext || null
   }
@@ -2222,6 +2234,11 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     // 绑定助手到当前会话
     session.assistantId = assistant.name
     session.title = assistant.name
+    // 上面的技能是按 cwd 装进产物区的，会话目录必须跟着走 —— 否则引擎仍在旧目录里
+    // 找不到它们。只在会话仍可换目录时回写（调用方只在空会话上暴露换助手）。
+    if (cwd && canSwitchWorkingDirectory(session.id)) {
+      session.workingDirectory = normalizeAbsolutePath(cwd)
+    }
     saveToStorage()
 
     // 换助手等于换 --agent, 旧进程必须停掉. 不再就地重启: 与
@@ -2269,6 +2286,7 @@ export const useChatSessionStore = defineStore('chatSession', () => {
     getSessionMessages,
     getDisplayMessages,
     getWorkingDirectory,
+    canSwitchWorkingDirectory,
     getTeamContext,
     getViewedAgentTaskId,
     getViewedTeammate,

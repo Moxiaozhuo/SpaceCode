@@ -43,6 +43,8 @@ vi.mock('@/services/electronAPI', () => ({
       getFullSession: mocks.getFullSession,
     },
     image: null,
+    agents: { install: vi.fn().mockResolvedValue({ success: true }) },
+    skills: { installLocal: vi.fn().mockResolvedValue({ success: true }) },
     trace: { event: mocks.traceEvent },
     session: {
       getTurnCheckpoints: mocks.getTurnCheckpoints,
@@ -404,5 +406,70 @@ describe('chatSession startup state', () => {
 
     expect(store.sessions.map(s => s.id)).toContain('legacy-1')
     expect(localStorage.getItem('chat_sessions_legacy')).toBeNull()
+  })
+})
+
+describe('chatSession canSwitchWorkingDirectory', () => {
+  const userMessage = {
+    id: 'm1',
+    role: 'user' as const,
+    content: 'hi',
+    timestamp: 1,
+  }
+
+  it('allows the switch before any session exists', async () => {
+    const store = await loadStore()
+
+    expect(store.canSwitchWorkingDirectory(null)).toBe(true)
+    expect(store.canSwitchWorkingDirectory('never-created')).toBe(true)
+  })
+
+  it('allows the switch while the session is still empty', async () => {
+    const store = await loadStore()
+    const session = store.createSession('Fresh', 'D:/repo')
+
+    expect(store.canSwitchWorkingDirectory(session.id)).toBe(true)
+  })
+
+  it('locks the session once it carries a message, and the lock is per session', async () => {
+    const store = await loadStore()
+    const used = store.createSession('Used', 'D:/repo')
+    const fresh = store.createSession('Fresh', 'D:/other')
+    used.messages.push(userMessage)
+
+    expect(store.canSwitchWorkingDirectory(used.id)).toBe(false)
+    expect(store.canSwitchWorkingDirectory(fresh.id)).toBe(true)
+  })
+})
+
+describe('chatSession switchWorkAssistant', () => {
+  it('rebinds the empty session to the workspace its skills were just installed into', async () => {
+    const { normalizeAbsolutePath } = await import('@/utils/normalizePath')
+    const { useAppStore } = await import('../app')
+    const app = useAppStore()
+    const store = await loadStore()
+    const session = store.createSession('Work', 'D:/old')
+    session.mode = 'work'
+    app.setWorkWorkspace('D:/workspace')
+
+    await store.switchWorkAssistant({ name: 'Docx Writer' })
+
+    expect(session.workingDirectory).toBe(normalizeAbsolutePath('D:/workspace'))
+  })
+
+  it('keeps the directory of a session that already carries a message', async () => {
+    const { useAppStore } = await import('../app')
+    const app = useAppStore()
+    const store = await loadStore()
+    const session = store.createSession('Work', 'D:/old')
+    session.mode = 'work'
+    session.messages.push({ id: 'm1', role: 'user', content: 'hi', timestamp: 1 })
+    app.setWorkWorkspace('D:/workspace')
+
+    await store.switchWorkAssistant({ name: 'Docx Writer' })
+
+    expect(session.workingDirectory).toBe('D:/old')
+    // 锁的是目录，不是换助手本身
+    expect(session.assistantId).toBe('Docx Writer')
   })
 })
