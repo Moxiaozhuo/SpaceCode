@@ -20,6 +20,12 @@ import { mapPiEvent } from '../PiEventMapper'
  *    message_start 不对称，user 帧的入口只有 message_start）。
  *  - tool_execution_end 的 output 统一为 string：对象 JSON.stringify(两空格缩进)，
  *    null/undefined → ''，循环引用（JSON 不安全）→ String 兜底。
+ *  - Pi 的小写工具名（bash/read/write/edit/grep/find）在本题翻译点归一为渲染层用的
+ *    PascalCase 名；未收录的名字（如 ls）原样透传。归一放这里是因为渲染层的组件、
+ *    图标、标签与 trace 分类表全部按 PascalCase 精确匹配，小写名会静默退化成
+ *    通用 JSON 行而不是终端/diff 卡片。
+ *  - 帧 fixture 必须照 pi-ai 的真实事件形状构造，不要按"字段应该存在"手写：
+ *    toolcall_start 只带 contentIndex/partial，id/name 在 partial.content 的块上。
  *
  * 纯函数直测，无 mock —— Pi 事件 fixture 直接按帧字面量构造
  * （与 piSessionProcess.stream.test.ts 的 frame 形状一致）。
@@ -198,20 +204,37 @@ describe('mapPiEvent — 生命周期与消息事件', () => {
 
   it('message_update toolcall 三态 → tool_use content_block_start（含 id/name）/ input_json_delta / content_block_stop', () => {
     const up = (ev: any) => mapPiEvent(SID, { type: 'message_update', assistantMessageEvent: ev })?.data.event
-    expect(up({ type: 'toolcall_start', toolCallId: 'tc1', toolName: 'read_file', partial: false })).toEqual({
+    // pi-ai 的 toolcall_start 帧只有 { contentIndex, partial }：id/name 在刚被推进
+    // partial.content[contentIndex] 的 toolCall 块上，不在帧顶层。
+    const partial = {
+      content: [
+        { type: 'text', text: '先看一下' },
+        { type: 'toolCall', id: 'tc1', name: 'bash', arguments: {}, partialJson: '', index: 1 },
+      ],
+    }
+    expect(up({ type: 'toolcall_start', contentIndex: 1, partial })).toEqual({
       type: 'content_block_start',
-      content_block: { type: 'tool_use', id: 'tc1', name: 'read_file' },
-      partial: false,
+      content_block: { type: 'tool_use', id: 'tc1', name: 'Bash' },
+      partial,
     })
-    expect(up({ type: 'toolcall_delta', delta: '{"path":', partial: false })).toEqual({
+    expect(up({ type: 'toolcall_delta', contentIndex: 1, delta: '{"command":', partial })).toEqual({
       type: 'content_block_delta',
-      delta: { type: 'input_json_delta', partial_json: '{"path":' },
-      partial: false,
+      delta: { type: 'input_json_delta', partial_json: '{"command":' },
+      partial,
     })
-    expect(up({ type: 'toolcall_end', partial: false })).toEqual({
+    expect(up({ type: 'toolcall_end', contentIndex: 1, toolCall: partial.content[1], partial })).toEqual({
       type: 'content_block_stop',
       content_block: { type: 'tool_use' },
-      partial: false,
+      partial,
+    })
+  })
+
+  it('toolcall_start 取不到 toolCall 块（contentIndex 越界）→ id/name 留空，不伪造', () => {
+    const up = (ev: any) => mapPiEvent(SID, { type: 'message_update', assistantMessageEvent: ev })?.data.event
+    expect(up({ type: 'toolcall_start', contentIndex: 7, partial: { content: [] } })).toEqual({
+      type: 'content_block_start',
+      content_block: { type: 'tool_use', id: undefined, name: undefined },
+      partial: { content: [] },
     })
   })
 
@@ -223,14 +246,18 @@ describe('mapPiEvent — 生命周期与消息事件', () => {
 })
 
 describe('mapPiEvent — 工具执行事件', () => {
-  it('tool_execution_start → tool_use：id=toolCallId、name=toolName、input=args', () => {
+  it('tool_execution_start → tool_use：id=toolCallId、name=toolName 归一为渲染层词表、input=args', () => {
     expect(
       mapPiEvent(SID, { type: 'tool_execution_start', toolCallId: 'tc9', toolName: 'bash', args: { cmd: 'ls' } }),
     ).toEqual({
       sessionId: SID,
       type: 'tool_use',
-      data: { id: 'tc9', name: 'bash', input: { cmd: 'ls' } },
+      data: { id: 'tc9', name: 'Bash', input: { cmd: 'ls' } },
     })
+    // 无对应卡片的 Pi 工具（ls）原样透传，不硬塞进别的词
+    expect(
+      mapPiEvent(SID, { type: 'tool_execution_start', toolCallId: 'tc10', toolName: 'ls', args: {} })?.data,
+    ).toMatchObject({ name: 'ls' })
   })
 
   it('tool_execution_update → stream_event 内嵌 tool_execution_delta，partialResult 原样', () => {
