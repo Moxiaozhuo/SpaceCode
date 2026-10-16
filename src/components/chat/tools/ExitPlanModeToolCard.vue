@@ -46,7 +46,8 @@ const turnStore = useTurnStore()
 const isExpanded = ref(false)
 
 const planContent = computed(() => {
-  const plan = props.toolCall.input?.plan
+  if (!props.toolCall.input) return ''
+  const plan = props.toolCall.input.plan
   return typeof plan === 'string' ? plan.trim() : ''
 })
 
