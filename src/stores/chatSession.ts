@@ -867,7 +867,11 @@ export const useChatSessionStore = defineStore('chatSession', () => {
 
     try {
       const config = settingsStore.config
-      const cwd = overrides?.cwd || session.workingDirectory || currentProjectRoot.value || await api.getCwd() || '/'
+      // 归一化后同时用于 spawn cwd 与会话记录：两侧必须是同一个字符串，
+      // 否则引擎按 raw cwd 建项目目录、历史记录却按另一种写法找。
+      const cwd = normalizeAbsolutePath(
+        overrides?.cwd || session.workingDirectory || currentProjectRoot.value || await api.getCwd() || '/'
+      )
       const appliedAgent = overrides?.agent || currentAgent.value || undefined
 
       // ★ 模型别名解析：将实际模型名映射为 claude-code 的 haiku/sonnet/opus 别名。
@@ -942,6 +946,12 @@ export const useChatSessionStore = defineStore('chatSession', () => {
       session.engineSource = settingsStore.engineSource
       session.provider = config.provider
       session.baseUrl = config.baseUrl || ''
+      // cwd 不在启动配置对账范围内，调用方（设计切换工作目录）只能显式传 overrides.cwd。
+      // 而 init 的 cwd 兜底链、selectSession 恢复项目根、JSONL 历史与产物扫描都以
+      // session.workingDirectory 为准 —— 引擎起来后必须把它对齐到实际 cwd，
+      // 否则下一次不带 cwd 的 init（换模型、崩溃自动重启、重启恢复）会把引擎拉回旧目录。
+      // 兜底链算出的 cwd（api.getCwd() / '/'）不回写：那是进程工作目录而非用户选择。
+      if (overrides?.cwd) session.workingDirectory = cwd
       session.startupFingerprint = buildStartupFingerprint({
         systemPrompt: overrides?.systemPrompt,
         agent: appliedAgent,

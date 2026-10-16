@@ -82,6 +82,8 @@ export default {
     replace: 'Replace folder',
     recent: 'Recent folders',
     recentEmpty: 'No recent folders',
+    switchFailed: 'Failed to switch working directory',
+    switchFailedDesc: 'Could not restart the session in {path}; reverted to the previous working directory',
   },
   linkMenu: {
     designSystem: 'Insert design-system context',

@@ -82,6 +82,8 @@ export default {
     replace: '更换目录',
     recent: '最近使用的目录',
     recentEmpty: '暂无最近使用的目录',
+    switchFailed: '工作目录切换失败',
+    switchFailedDesc: '未能在 {path} 重启会话，已回到原工作目录',
   },
   linkMenu: {
     designSystem: '插入设计系统上下文',
