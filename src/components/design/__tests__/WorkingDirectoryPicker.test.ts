@@ -20,10 +20,15 @@ const i18n = createI18n({
 })
 config.global.plugins = [i18n]
 
+function hintText(): string {
+  return document.querySelector('.app-hint-bubble')?.textContent || ''
+}
+
 describe('WorkingDirectoryPicker', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    document.body.innerHTML = ''
     vi.mocked(api.selectFolder).mockResolvedValue({ canceled: false, filePaths: ['/new/project'] })
   })
 
@@ -80,7 +85,9 @@ describe('WorkingDirectoryPicker', () => {
 
     expect(trigger.attributes('aria-disabled')).toBe('true')
     expect(trigger.attributes('disabled')).toBeUndefined()
-    expect(trigger.attributes('title')).toContain('请新建会话')
+
+    await trigger.trigger('mouseenter')
+    expect(hintText()).toContain('请新建会话')
 
     await trigger.trigger('click')
     expect(w.find('[data-testid="working-dir-panel"]').exists()).toBe(false)

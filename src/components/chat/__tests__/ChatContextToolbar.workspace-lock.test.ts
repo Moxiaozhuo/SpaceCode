@@ -61,6 +61,10 @@ function seedRecent(paths: string[]) {
   localStorage.setItem('app_recent_project_roots_v1', JSON.stringify(paths))
 }
 
+function hintText(): string {
+  return document.querySelector('.app-hint-bubble')?.textContent || ''
+}
+
 async function mountToolbar(props: Record<string, unknown> = {}) {
   const w = mount(ChatContextToolbar, { props, global: { plugins: [i18n] } })
   await flushPromises()
@@ -75,6 +79,7 @@ describe('ChatContextToolbar 工作区锁定', () => {
   beforeEach(() => {
     vi.clearAllMocks()
     localStorage.clear()
+    document.body.innerHTML = ''
     setActivePinia(createPinia())
   })
 
@@ -88,7 +93,8 @@ describe('ChatContextToolbar 工作区锁定', () => {
     expect(btn.attributes('aria-disabled')).toBe('true')
     // 用 aria-disabled 而非 disabled：按钮要继续接收 hover，锁定原因才提示得出来
     expect(btn.attributes('disabled')).toBeUndefined()
-    expect(btn.attributes('title')).toContain('请新建会话')
+    await btn.trigger('mouseenter')
+    expect(hintText()).toContain('请新建会话')
 
     await btn.trigger('click')
     expect(w.find('[data-testid="ctx-project-dropdown"]').exists()).toBe(false)
@@ -139,7 +145,20 @@ describe('ChatContextToolbar 工作区锁定', () => {
 
     expect(btn.attributes('aria-disabled')).toBeUndefined()
     expect(btn.text()).toContain('session-dir')
-    expect(btn.attributes('title')).toContain('仅对新建会话生效')
+    await btn.trigger('mouseenter')
+    expect(hintText()).toContain('仅对新建会话生效')
     expect(chat.currentSession?.workingDirectory).toBe('D:/session-dir')
+  })
+
+  it('code 模式历史会话不锁入口，但气泡说明选项目只是打开该项目的会话', async () => {
+    useAppStore().setMode('code')
+    addSession('code', 'D:/repo', true)
+
+    const w = await mountToolbar()
+    const btn = projectTrigger(w)
+
+    expect(btn.attributes('aria-disabled')).toBeUndefined()
+    await btn.trigger('mouseenter')
+    expect(hintText()).toContain('当前会话的工作目录不变')
   })
 })

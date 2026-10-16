@@ -5,7 +5,7 @@
       class="working-dir-picker"
       data-testid="working-dir-trigger"
       :class="{ 'is-locked': locked }"
-      :title="locked ? t('design.workingDirectory.locked') : (modelValue || t('design.workingDirectory.none'))"
+      v-hint="locked ? t('design.workingDirectory.locked') : modelValue"
       :aria-expanded="open"
       :aria-disabled="locked || undefined"
       @click="toggleOpen"
@@ -86,6 +86,7 @@ import { computed, onMounted, onUnmounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { ChevronDown, ChevronRight, Folder, History, X } from 'lucide-vue-next'
 import { api } from '@/services/electronAPI'
+import { vHint } from '@/components/common/vHint'
 import { getRecentProjectRoots, recordRecentProjectRoot, pathsEqual } from '@/utils/recentProjectRoots'
 
 const props = defineProps<{ modelValue: string; locked?: boolean }>()

@@ -6,7 +6,7 @@
         class="ctx-trigger"
         data-testid="ctx-project-trigger"
         :class="{ active: showProjectDropdown, 'is-locked': projectSwitchLocked }"
-        :title="projectTriggerTitle"
+        v-hint="projectTriggerHint"
         :aria-disabled="projectSwitchLocked || undefined"
         @click="toggleProjectDropdown"
       >
@@ -135,6 +135,7 @@ import {
   Search, Check, Plus, X
 } from 'lucide-vue-next'
 import { vClickOutside } from '@/components/common/vClickOutside'
+import { vHint } from '@/components/common/vHint'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { useScmStore, type ScmBranch } from '@/stores/scm'
@@ -205,9 +206,23 @@ const workWorkspaceHint = computed(() => {
   return t('contextToolbar.workWorkspaceNewSessionOnly', { path: sessionDir })
 })
 
-const projectTriggerTitle = computed(() => {
-  if (projectSwitchLocked.value) return t('contextToolbar.workspaceLocked')
-  return workWorkspaceHint.value || currentWorkspacePath.value
+/**
+ * code 模式选项目走「复用/新建该项目下的会话」，从不改当前会话的目录，所以不锁。
+ * 但它的样子和 design 模式一模一样，用户会以为在改本会话的工作区 —— 说清楚。
+ */
+const codeModeHint = computed(() => {
+  if (isLocal.value || isWorkMode.value || isDesignMode.value) return ''
+  if (sessionStore.canSwitchWorkingDirectory(sessionStore.currentSessionId)) return ''
+  return t('contextToolbar.codeProjectOpensSession')
+})
+
+const projectTriggerHint = computed(() => {
+  const reason = projectSwitchLocked.value
+    ? t('contextToolbar.workspaceLocked')
+    : workWorkspaceHint.value || codeModeHint.value
+  const path = currentWorkspacePath.value
+  if (!reason) return path
+  return path ? `${reason}\n${path}` : reason
 })
 
 // --- Project Selector ---
