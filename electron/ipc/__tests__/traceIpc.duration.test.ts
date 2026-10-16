@@ -31,6 +31,7 @@ type ListResult = { traces: Array<{ summary: Summary }> }
 const probe = vi.hoisted(() => ({
   handlers: {} as Record<string, IpcHandler>,
   events: [] as TraceEventFixture[],
+  sessionStat: { size: 1, modifiedAt: 1 },
 }))
 
 vi.mock('electron', () => ({
@@ -44,13 +45,17 @@ vi.mock('electron', () => ({
 
 vi.mock('../../infra/logger', () => ({
   listTraceSessions: vi.fn(async () => [{
-    sessionId: 'sess-1', path: '/tmp/sess-1.jsonl', size: 1, modifiedAt: 1, eventCount: probe.events.length,
+    sessionId: 'sess-1', path: '/tmp/sess-1.jsonl',
+    size: probe.sessionStat.size, modifiedAt: probe.sessionStat.modifiedAt,
   }]),
   readTraceEvents: vi.fn(async () => ({ success: true, events: probe.events })),
+  statTraceSession: vi.fn(async () => ({ ...probe.sessionStat })),
   getTraceDir: vi.fn(() => '/tmp/traces'),
 }))
 
 import { registerTraceIPCHandlers } from '../traceIpc'
+import { readTraceEvents } from '../../infra/logger'
+import { resetTraceSidecar } from '../../infra/traceSidecar'
 
 const TS = '2026-06-12T20:44:57.259+08:00'
 const at = (ms: number) => new Date(new Date(TS).getTime() + ms).toISOString()
@@ -90,6 +95,9 @@ async function getTrace(): Promise<{ calls: CallRecord[]; summary: Summary }> {
 beforeEach(() => {
   probe.handlers = {}
   probe.events = []
+  probe.sessionStat = { size: 1, modifiedAt: 1 }
+  vi.mocked(readTraceEvents).mockClear()
+  resetTraceSidecar()
   registerTraceIPCHandlers()
 })
 
@@ -160,5 +168,24 @@ describe('traceIpc 耗时转换', () => {
 
     expect(list.traces[0].summary.totalDurationMs).toBe(detail.summary.totalDurationMs)
     expect(list.traces[0].summary.totalDurationMs).toBe(15900)
+  })
+
+  it('trace:list 的 summary 按 (size, mtime) 缓存：未变化不重读，变化后失效重算', async () => {
+    probe.events = [turnEvent({ duration: 15900 })]
+    const first = (await probe.handlers['trace:list']({ limit: 50, offset: 0 })) as ListResult
+    const readsAfterFirst = vi.mocked(readTraceEvents).mock.calls.length
+    expect(readsAfterFirst).toBe(1)
+
+    // 同样的 size/mtime：命中缓存，不再触发文件读取，summary 复用
+    const second = (await probe.handlers['trace:list']({ limit: 50, offset: 0 })) as ListResult
+    expect(vi.mocked(readTraceEvents).mock.calls.length).toBe(readsAfterFirst)
+    expect(second.traces[0].summary.totalDurationMs).toBe(first.traces[0].summary.totalDurationMs)
+
+    // mtime 变化：缓存失效，重新读取并按新事件重算
+    probe.sessionStat.modifiedAt = 2
+    probe.events = [turnEvent({ duration: 30000 })]
+    const third = (await probe.handlers['trace:list']({ limit: 50, offset: 0 })) as ListResult
+    expect(vi.mocked(readTraceEvents).mock.calls.length).toBe(readsAfterFirst + 1)
+    expect(third.traces[0].summary.totalDurationMs).toBe(30000)
   })
 })

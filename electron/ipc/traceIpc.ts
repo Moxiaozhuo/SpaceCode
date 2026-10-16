@@ -3,37 +3,34 @@
  *
  * Converts internal AgentTraceEvents to the trace session/call format
  * expected by the renderer's trace inspector UI.
+ *
+ * list 的 summary 来源优先级（见 traceSidecar.ts）：
+ *   1. 内存侧车（写路径逐事件增量维护，stat 校验命中 → 零读取零解析）
+ *   2. 磁盘侧车（跨重启冷启动，(size, mtime) 校验命中 → 零解析）
+ *   3. 全量解析回填（worker 线程；读全量文件重建侧车，此后归 1）
+ * detail（trace:getTrace）仍解析最新 5000 条事件供逐条渲染，summary 与
+ * list 同源（traceAggregate），区别仅在长会话（>5000 条）的截断口径。
  */
 import { ipcMain } from 'electron'
 import {
   listTraceSessions,
   readTraceEvents,
+  statTraceSession,
   getTraceDir,
 } from '../infra/logger'
-import { readTraceEventDurationMs, traceEventTimeRange, unionTraceDurationMs } from '@/lib/trace/duration'
-
-type AgentTraceEventForTrace = {
-  id?: string
-  sessionId: string
-  timestamp?: string
-  source?: string
-  actor?: string
-  type: string
-  status?: string
-  title?: string
-  input?: unknown
-  output?: unknown
-  error?: { message: string; stack?: string }
-  metadata?: Record<string, unknown>
-}
-
-function isLlmCallEvent(e: AgentTraceEventForTrace): boolean {
-  return e.actor === 'assistant' || e.type === 'assistant_text' || e.type === 'assistant_turn' || e.type === 'assistant_reasoning'
-}
-
-function isToolCallEvent(e: AgentTraceEventForTrace): boolean {
-  return e.actor === 'tool' || e.type === 'tool_call'
-}
+import {
+  isLlmCallEvent,
+  isToolCallEvent,
+  summarizeEvents,
+  type AgentTraceEventForTrace,
+  type TraceSummary,
+} from '../infra/traceAggregate'
+import {
+  getSidecarSummary,
+  adoptSidecarFromDisk,
+  backfillSidecar,
+} from '../infra/traceSidecar'
+import { readTraceEventDurationMs, traceEventTimeRange } from '@/lib/trace/duration'
 
 function eventToCallRecord(e: AgentTraceEventForTrace): Record<string, unknown> {
   const usage = e.metadata?.usage as Record<string, unknown> | undefined
@@ -90,29 +87,17 @@ function eventToEventRecord(e: AgentTraceEventForTrace): Record<string, unknown>
   }
 }
 
-function buildTraceSummary(calls: Record<string, unknown>[], events: AgentTraceEventForTrace[]): Record<string, unknown> {
-  // apiCalls 与 token 数是 turn 级事件推算出来的，不是真实请求级计数：一次回合可能含多次
-  // API 请求，且没有任何写入方给 trace 事件写 metadata.usage，所以 token 恒为 0。
-  // 需要精确计数得先补请求级 trace 事件（#41 拆分票 16 明确划到票外）。
-  const apiCalls = calls.length
-  const failedCalls = calls.filter(c => c.status === 'error').length
-  // 事件源被 readTraceEvents 截断在最新 5000 条，超长会话的总时长因此偏小 —— 沿用截断口径。
-  const totalDurationMs = unionTraceDurationMs(events)
-  let totalInputTokens = 0
-  let totalOutputTokens = 0
-  const modelCounts = new Map<string, number>()
-  for (const call of calls) {
-    const usage = call.usage as { inputTokens?: number; outputTokens?: number } | undefined
-    if (usage) {
-      totalInputTokens += usage.inputTokens || 0
-      totalOutputTokens += usage.outputTokens || 0
-    }
-    const model = call.model as string | undefined
-    if (model) modelCounts.set(model, (modelCounts.get(model) || 0) + 1)
-  }
-  const models = Array.from(modelCounts.entries()).map(([model, calls]) => ({ model, calls }))
-  const updatedAt = events.length > 0 ? events[events.length - 1].timestamp || null : null
-  return { apiCalls, failedCalls, totalDurationMs, totalInputTokens, totalOutputTokens, models, updatedAt }
+type SessionStat = { size: number; modifiedAt: number }
+
+/**
+ * list 的侧车兜底：全量读（maxEvents=0，worker 线程）重建侧车。
+ * 全量而非截断 5000，是因为侧车要作为后续增量累积的基底——
+ * 从截断事件起步会让后续增量与基底口径不一致。
+ */
+async function backfillListSummary(sessionId: string, stat: SessionStat): Promise<TraceSummary> {
+  const result = await readTraceEvents(sessionId, 0)
+  const events = (result.success ? (result.events || []) : []) as unknown as AgentTraceEventForTrace[]
+  return backfillSidecar(sessionId, stat, events)
 }
 
 export function registerTraceIPCHandlers(): void {
@@ -128,10 +113,9 @@ export function registerTraceIPCHandlers(): void {
     const paged = filtered.slice(offset, offset + limit)
     return {
       traces: await Promise.all(paged.map(async s => {
-        const evtResult = await readTraceEvents(s.sessionId, 5000)
-        const evts = evtResult.success ? (evtResult.events || []) as unknown as AgentTraceEventForTrace[] : []
-        const calls = evts.filter(isLlmCallEvent).map(eventToCallRecord)
-        const summary = buildTraceSummary(calls, evts)
+        const summary = getSidecarSummary(s.sessionId, s)
+          ?? adoptSidecarFromDisk(s.sessionId, s)
+          ?? await backfillListSummary(s.sessionId, s)
         return {
           sessionId: s.sessionId,
           session: null,
@@ -146,6 +130,11 @@ export function registerTraceIPCHandlers(): void {
     }
   })
 
+  // 轻量变更检测：只 stat 文件，供轮询方在 mtime/size 未变时跳过全量读取。
+  ipcMain.handle('trace:statSession', async (_event, sessionId: string) => {
+    return statTraceSession(sessionId)
+  })
+
   ipcMain.handle('trace:getTrace', async (_event, sessionId: string) => {
     try {
       const result = await readTraceEvents(sessionId, 5000)
@@ -153,7 +142,7 @@ export function registerTraceIPCHandlers(): void {
       const events = (result.events || []) as unknown as AgentTraceEventForTrace[]
       const calls = events.filter(isLlmCallEvent).map(eventToCallRecord)
       const traceEvents = events.map(eventToEventRecord)
-      const summary = buildTraceSummary(calls, events)
+      const summary = summarizeEvents(events)
       return {
         success: true,
         data: {

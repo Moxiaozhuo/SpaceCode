@@ -50,6 +50,9 @@ const traceApi = {
   /** cc-haha 复刻: 获取 trace 会话列表 */
   list: (params?: { limit?: number; offset?: number; query?: string }) =>
     ipcRenderer.invoke('trace:list', params),
+  /** 轻量 stat 单个 trace 会话文件，轮询前变更检测用 */
+  statSession: (sessionId: string) =>
+    ipcRenderer.invoke('trace:statSession', sessionId),
   /** cc-haha 复刻: 获取单个 trace 会话详情 */
   getTrace: (sessionId: string) =>
     ipcRenderer.invoke('trace:getTrace', sessionId),

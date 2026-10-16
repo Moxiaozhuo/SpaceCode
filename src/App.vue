@@ -81,7 +81,7 @@
 </template>
 
 <script setup lang="ts">
-import { defineAsyncComponent, ref, onMounted, onUnmounted, watch } from 'vue'
+import { defineAsyncComponent, ref, onMounted, onUnmounted, watch, type Component } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
@@ -105,7 +105,16 @@ import { useOpenProjectWorkflow } from '@/composables/useOpenProjectWorkflow'
 import { useResizablePanel } from '@/composables/useResizablePanel'
 import { recordRecentProjectRoot } from '@/utils/recentProjectRoots'
 
-const DesignPage = defineAsyncComponent(() => import('./components/design/DesignPage.vue'))
+/** 统一的页面级异步组件配置：chunk 加载期间渲染骨架屏，避免白屏。 */
+function lazyPage(loader: () => Promise<{ default: Component }>) {
+  return defineAsyncComponent({
+    loader,
+    loadingComponent: AsyncLoadingState,
+    delay: 0,
+  })
+}
+
+const DesignPage = lazyPage(() => import('./components/design/DesignPage.vue'))
 // 右侧面板整棵模块树（xterm / @git-diff-view / 各 viewer）随此 chunk 首次加载。
 // 抽出 loader 供启动后空闲预热，避免首次点击 subagent 卡片等入口时现场加载导致数秒卡顿。
 const loadInfoPanel = () => import('./components/layout/InfoPanel.vue')
@@ -116,7 +125,9 @@ const InfoPanel = defineAsyncComponent({
 })
 const TerminalTabBar = defineAsyncComponent(() => import('./components/terminal/TerminalTabBar.vue'))
 const TerminalPanel = defineAsyncComponent(() => import('./components/terminal/TerminalPanel.vue'))
-const TraceViewer = defineAsyncComponent(() => import('./components/debug/TraceViewer.vue'))
+// TraceViewer chunk 仅 38KB 且依赖（stores-chat）首屏已加载，空闲预热后点击调试追踪零等待。
+const loadTraceViewer = () => import('./components/debug/TraceViewer.vue')
+const TraceViewer = lazyPage(loadTraceViewer)
 const SettingsPanel = defineAsyncComponent({
   loader: () => import('./components/settings/SettingsPanel.vue'),
   loadingComponent: AsyncLoadingState,
@@ -134,13 +145,13 @@ const OldSkillsManager = defineAsyncComponent({
   loadingComponent: AsyncLoadingState,
   delay: 0,
 })
-const AgentManager = defineAsyncComponent(() => import('./components/agents/AgentManager.vue'))
-const McpManager = defineAsyncComponent(() => import('./components/mcp/McpManager.vue'))
-const CronManager = defineAsyncComponent(() => import('./components/cron/CronManager.vue'))
-const WorkAssistantGallery = defineAsyncComponent(() => import('./components/work/WorkAssistantGallery.vue'))
-const WorkspaceOnboarding = defineAsyncComponent(() => import('./components/work/WorkspaceOnboarding.vue'))
-const ConnectMobileDialog = defineAsyncComponent(() => import('./components/mobile/ConnectMobileDialog.vue'))
-const FileQuickOpen = defineAsyncComponent(() => import('./components/layout/FileQuickOpen.vue'))
+const AgentManager = lazyPage(() => import('./components/agents/AgentManager.vue'))
+const McpManager = lazyPage(() => import('./components/mcp/McpManager.vue'))
+const CronManager = lazyPage(() => import('./components/cron/CronManager.vue'))
+const WorkAssistantGallery = lazyPage(() => import('./components/work/WorkAssistantGallery.vue'))
+const WorkspaceOnboarding = lazyPage(() => import('./components/work/WorkspaceOnboarding.vue'))
+const ConnectMobileDialog = lazyPage(() => import('./components/mobile/ConnectMobileDialog.vue'))
+const FileQuickOpen = lazyPage(() => import('./components/layout/FileQuickOpen.vue'))
 
 const appStore = useAppStore()
 const sessionStore = useChatSessionStore()
@@ -445,11 +456,14 @@ onMounted(() => {
   // 使首次打开面板（如点击 subagent 卡片）无需现场加载整棵模块树。
   // 延迟一拍再交给 requestIdleCallback，避免与首屏渲染抢资源。
   const warmInfoPanel = () => { void loadInfoPanel() }
+  const warmTraceViewer = () => { void loadTraceViewer() }
   window.setTimeout(() => {
     if (typeof window.requestIdleCallback === 'function') {
       window.requestIdleCallback(warmInfoPanel, { timeout: 2000 })
+      window.requestIdleCallback(warmTraceViewer, { timeout: 4000 })
     } else {
       warmInfoPanel()
+      warmTraceViewer()
     }
   }, 800)
 

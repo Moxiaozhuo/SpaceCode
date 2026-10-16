@@ -99,7 +99,6 @@ export interface TraceSessionEntry {
   path: string
   size: number
   modifiedAt: number
-  eventCount: number
 }
 
 export interface AgentTraceEvent {

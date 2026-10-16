@@ -177,6 +177,7 @@ export interface ElectronDebugAPI {
 export interface ElectronTraceAPI {
   event: (event: AgentTraceEvent) => void
   list: (params?: { limit?: number; offset?: number; query?: string }) => Promise<TraceSessionList>
+  statSession: (sessionId: string) => Promise<{ size: number; modifiedAt: number } | null>
   getTrace: (sessionId: string) => Promise<{ success: boolean; data?: TraceSession; error?: string }>
   getTraceCall: (sessionId: string, callId: string) => Promise<{ call?: TraceCallRecord } | null>
   getSettings: () => Promise<{ enabled: boolean; storageDir: string } | null>

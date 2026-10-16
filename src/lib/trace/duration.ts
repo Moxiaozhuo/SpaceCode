@@ -55,6 +55,25 @@ export function traceEventTimeRange(
  * 只取 turn 一族又会丢掉失败/中断的回合 —— 那些回合在旧版本里根本没写 metadata，
  * 只有 engine 的 result 留下时长。并集两头都对上：重叠自动合并，不重叠的都算。
  */
+/**
+ * 时间窗并集长度。供 `unionTraceDurationMs` 与主进程 summary 侧车共用：
+ * 侧车按事件增量记录窗口，读取时用同一算法算总时长，保证与全量聚合口径一致。
+ * 不修改传入数组（调用方可能持有持久化的窗口列表）。
+ */
+export function unionWindows(windows: Array<[number, number]>): number {
+  if (windows.length === 0) return 0
+
+  const sorted = [...windows].sort((a, b) => a[0] - b[0])
+  let total = 0
+  let [openStart, openEnd] = sorted[0]
+  for (let i = 1; i < sorted.length; i++) {
+    const [start, end] = sorted[i]
+    if (start <= openEnd) openEnd = Math.max(openEnd, end)
+    else { total += openEnd - openStart; openStart = start; openEnd = end }
+  }
+  return total + (openEnd - openStart)
+}
+
 export function unionTraceDurationMs(events: TraceDurationEvent[]): number {
   const windows: Array<[number, number]> = []
   for (const event of events) {
@@ -63,15 +82,5 @@ export function unionTraceDurationMs(events: TraceDurationEvent[]): number {
     if (durationMs === undefined || !Number.isFinite(end)) continue
     windows.push([end - durationMs, end])
   }
-  if (windows.length === 0) return 0
-
-  windows.sort((a, b) => a[0] - b[0])
-  let total = 0
-  let [openStart, openEnd] = windows[0]
-  for (let i = 1; i < windows.length; i++) {
-    const [start, end] = windows[i]
-    if (start <= openEnd) openEnd = Math.max(openEnd, end)
-    else { total += openEnd - openStart; openStart = start; openEnd = end }
-  }
-  return total + (openEnd - openStart)
+  return unionWindows(windows)
 }
