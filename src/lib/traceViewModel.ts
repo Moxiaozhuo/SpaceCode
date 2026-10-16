@@ -4,7 +4,7 @@
  */
 import type { TraceCallUsage, TraceEventRecord } from '@/types/trace'
 import type { AgentTraceEvent } from '@/services/electronAPI'
-import { mergeTraceDurationMs, readTraceEventDurationMs } from '@/utils/traceDuration'
+import { readTraceEventDurationMs, traceEventTimeRange, unionTraceDurationMs } from '@/lib/trace/duration'
 
 export type TraceSpanKind = 'session' | 'turn' | 'message' | 'llm' | 'tool' | 'tool_result' | 'event'
 export type TraceSpanStatus = 'ok' | 'error' | 'pending'
@@ -174,9 +174,9 @@ export function buildTraceViewModel(
       const isNoise = isLifecycleNoiseEvent(event)
       const timestamp = event.timestamp || fallbackTimestamp
       const durationMs = readTraceEventDurationMs(event.metadata)
-      // 带耗时的事件都在回合结束时落盘，timestamp 就是结束时刻；不能用 timestamp + durationMs
-      // 造一个未来的 completedAt，否则 turn / root 的跨度聚合会被撑大。
-      const completedAt = durationMs === undefined ? undefined : timestamp
+      // 带耗时的事件在回合结束时落盘，completedAt 就等于那个时间戳；不能用 timestamp + durationMs
+      // 造一个未来的结束时刻，否则 turn / root 的跨度聚合会被撑大。
+      const { completedAt } = traceEventTimeRange(timestamp, durationMs)
 
       addSpan(spans, {
         id: spanId,
@@ -241,7 +241,7 @@ export function buildTraceViewModel(
     spansById: new Map(spanList.map((span) => [span.id, span])),
     turns,
     orderedSpanIds,
-    totalDurationMs: mergeTraceDurationMs(events),
+    totalDurationMs: unionTraceDurationMs(events),
     diagnosis: buildDiagnosis(spanList, turns, rootId, fallbackTimestamp),
   }
 }

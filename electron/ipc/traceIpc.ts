@@ -10,7 +10,7 @@ import {
   readTraceEvents,
   getTraceDir,
 } from '../infra/logger'
-import { mergeTraceDurationMs, readTraceEventDurationMs, traceEventTimeRange } from '@/utils/traceDuration'
+import { readTraceEventDurationMs, traceEventTimeRange, unionTraceDurationMs } from '@/lib/trace/duration'
 
 type AgentTraceEventForTrace = {
   id?: string
@@ -42,7 +42,8 @@ function eventToCallRecord(e: AgentTraceEventForTrace): Record<string, unknown> 
   const durationMs = readTraceEventDurationMs(e.metadata)
   const model = (e.metadata?.model as string) || e.metadata?.modelId as string | undefined
   // 耗时事件都在回合结束时落盘，所以 e.timestamp 是结束时间，开始时间用耗时反推。
-  const { startedAt, completedAt } = traceEventTimeRange(e.timestamp, durationMs)
+  const { startedAt: derivedStart, completedAt } = traceEventTimeRange(e.timestamp, durationMs)
+  const startedAt = derivedStart ?? e.timestamp ?? new Date().toISOString()
   const callStatus = e.status === 'failed' ? 'error' : e.status === 'running' || e.status === 'started' ? 'pending' : 'ok'
   const inputPreview = typeof e.input === 'string' ? e.input : JSON.stringify(e.input ?? '')
   const outputPreview = typeof e.output === 'string' ? e.output : JSON.stringify(e.output ?? '')
@@ -95,7 +96,8 @@ function buildTraceSummary(calls: Record<string, unknown>[], events: AgentTraceE
   // 需要精确计数得先补请求级 trace 事件（#41 拆分票 16 明确划到票外）。
   const apiCalls = calls.length
   const failedCalls = calls.filter(c => c.status === 'error').length
-  const totalDurationMs = mergeTraceDurationMs(events)
+  // 事件源被 readTraceEvents 截断在最新 5000 条，超长会话的总时长因此偏小 —— 沿用截断口径。
+  const totalDurationMs = unionTraceDurationMs(events)
   let totalInputTokens = 0
   let totalOutputTokens = 0
   const modelCounts = new Map<string, number>()

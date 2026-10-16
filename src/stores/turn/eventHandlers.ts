@@ -14,6 +14,7 @@ import {
 import type { TurnStateMachine } from './turnStateMachine'
 import type { TimelineAssembler } from './timelineAssembler'
 import { createUuid } from '@/utils/uuid'
+import { TRACE_DURATION_KEY } from '@/lib/trace/duration'
 import { needsWorkspaceRootScan } from '@/utils/artifactScope'
 import { isAutoPreviewPath } from '@/utils/artifactFormat'
 import { normalizeAbsolutePath } from '@/utils/normalizePath'
@@ -1167,7 +1168,7 @@ export function createEventHandlers(opts: EventReducerOptions): EventReducer {
           title: 'Assistant turn completed',
           output: { content: msg.content },
           metadata: {
-            durationMs: msg.metadata?.duration,
+            [TRACE_DURATION_KEY]: msg.metadata?.duration,
             model: msg.metadata?.model,
             stopReason: result.stop_reason || '',
             warning: msg.metadata?.warning || '',
@@ -1396,7 +1397,7 @@ export function createEventHandlers(opts: EventReducerOptions): EventReducer {
       status: 'failed',
       title: hadRetry ? 'Assistant turn failed (retries exhausted)' : 'Assistant turn failed',
       error: { message: classified.technicalDetail },
-      metadata: { durationMs: failedDurationMs },
+      metadata: { [TRACE_DURATION_KEY]: failedDurationMs },
     })
 
     sink.patchMessage(sessionId, ts.assistantMessageId, {
