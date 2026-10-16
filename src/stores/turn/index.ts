@@ -9,7 +9,7 @@ import { useSettingsStore } from '../settings'
 import { useContextUsageStore } from '../contextUsage'
 import type { SessionSink } from '../turnSink'
 import { ErrorCategory } from '@/types'
-import { permissionService, type PermissionRequest } from '@/services/permissionService'
+import { permissionService, type PermissionRequest, type PermissionUpdate } from '@/services/permissionService'
 import { notifyWaitingForUser } from '@/services/waitNotification'
 import {
   isTeammateRawMessage,
@@ -718,11 +718,17 @@ export function useTurnStore(injectedApi?: any) {
       return permissionService.consumePermissionFor(toolUseId, sessionId)
     }
 
+    /**
+     * @param updatedPermissions 要交回引擎落地的权限规则（"始终允许"）。缺省 = 只放行这一次。
+     *        取值应是请求里的 `permissionSuggestions` 原样回传，不要宿主侧自己构造。
+     *        注意 `decisionClassification` 只进遥测，不会让授权变持久。
+     */
     async function allowPermission(
       messageId: string,
       toolUseId: string,
       updatedInput: Record<string, unknown>,
       decisionClassification?: 'user_temporary' | 'user_permanent',
+      updatedPermissions?: PermissionUpdate[],
       sessionId?: string,
     ): Promise<void> {
       const sid = sessionId ?? sessionStore.currentSessionId
@@ -737,10 +743,10 @@ export function useTurnStore(injectedApi?: any) {
         sessionStore.logger.warn('ChatStore', `allowPermission: no pending request | sessionId=${sid.slice(0, 8)} | toolUseId=${toolUseId.slice(0, 8)}`)
         return
       }
-      sessionStore.logger.info('ChatStore', `allowPermission | sessionId=${sid.slice(0, 8)} | tool=${req.toolName} | requestId=${req.requestId.slice(0, 8)}`)
+      sessionStore.logger.info('ChatStore', `allowPermission | sessionId=${sid.slice(0, 8)} | tool=${req.toolName} | requestId=${req.requestId.slice(0, 8)} | class=${decisionClassification || '(none)'} | perms=${updatedPermissions?.length ?? 0}`)
       try {
         const safeInput = JSON.parse(JSON.stringify(updatedInput)) as Record<string, unknown>
-        await claudeCode.allowPermission(sid, req.requestId, safeInput, decisionClassification)
+        await claudeCode.allowPermission(sid, req.requestId, safeInput, decisionClassification, updatedPermissions)
         sink.patchToolCall(sid, messageId, toolUseId, 'completed')
       } catch (error) {
         sessionStore.logger.error('ChatStore', 'allowPermission failed', { error: String(error) })
