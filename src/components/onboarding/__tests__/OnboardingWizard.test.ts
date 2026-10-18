@@ -5,6 +5,7 @@ import { mount } from '@vue/test-utils'
 import { nextTick } from 'vue'
 
 import OnboardingWizard from '../OnboardingWizard.vue'
+import SearchableSelect from '@/components/settings/SearchableSelect.vue'
 import { useOnboardingStore } from '@/stores/onboarding'
 import { useSettingsStore } from '@/stores/settings'
 import enUS from '@/i18n/locales/en-US'
@@ -190,5 +191,35 @@ describe('模型步骤', () => {
     const chips = wrapper.findAll('.ob-chip')
     expect(chips.filter(c => c.attributes('disabled') !== undefined)).toHaveLength(2)
     expect(wrapper.find('.ob-hint--warn').text()).toContain('还没接通')
+  })
+
+  it('三个档位复用设置页的可搜索下拉，选中即写入对应槽位', async () => {
+    const { wrapper, settings } = await mountWizard()
+    await wrapper.find('.ob-btn--primary').trigger('click')
+    for (let i = 0; i < 3; i += 1) {
+      await wrapper.find('.ob-btn--primary').trigger('click')
+    }
+    await tick()
+
+    expect(wrapper.findAll('.ob-slot .searchable-select')).toHaveLength(3)
+
+    const balanced = wrapper.findAllComponents(SearchableSelect)[0]
+    balanced.vm.$emit('update:modelValue', 'claude-sonnet-4-5')
+    await tick()
+
+    expect(settings.anthropicConfig.sonnetModel).toBe('claude-sonnet-4-5')
+  })
+
+  it('端点拉不通时下拉仍有兜底候选，不至于空着选不了', async () => {
+    const { wrapper } = await mountWizard()
+    await wrapper.find('.ob-btn--primary').trigger('click')
+    for (let i = 0; i < 3; i += 1) {
+      await wrapper.find('.ob-btn--primary').trigger('click')
+    }
+    await tick()
+
+    const options = wrapper.findAllComponents(SearchableSelect)[0].props('options')
+    expect(options.length).toBeGreaterThan(0)
+    expect(options.some(o => o.id === 'claude-3-5-sonnet-20241022')).toBe(true)
   })
 })

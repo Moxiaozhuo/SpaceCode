@@ -1,4 +1,5 @@
 import type { AuthMethod, ProviderConfig } from '@/stores/settings'
+import type { RawModel } from './modelCatalog'
 import { normalizeApiUrl } from '@/utils/apiUrl'
 import { api } from '@/services/electronAPI'
 
@@ -27,6 +28,10 @@ export interface ProviderEndpoint {
   apiKey: string
 }
 
+export function providerTargetOf(method: AuthMethod): ProviderTarget {
+  return TARGET_BY_METHOD[method]
+}
+
 export function defaultBaseUrlOf(method: AuthMethod): string {
   return DEFAULT_BASE_URL[TARGET_BY_METHOD[method]]
 }
@@ -49,10 +54,36 @@ export function resolveEndpoint(
 export type ProbeFailure = 'no-key' | 'proxy' | 'http' | 'network'
 
 export type ProbeOutcome =
-  | { status: 'ok'; modelIds: string[] }
+  | { status: 'ok'; models: RawModel[] }
   | { status: 'failed'; reason: ProbeFailure; httpStatus?: number }
 
-/** 打一次 GET {baseUrl}/models 验证连通性，顺带取回可用模型 id。 */
+/**
+ * /models 的响应形状各家网关不统一（裸数组 / data / models），
+ * 且 id 与 name 字段互为主备 —— 设置页与引导向导共用这一份归一化。
+ */
+export function toRawModels(payload: unknown): RawModel[] {
+  if (typeof payload === 'string') return [{ id: payload }]
+  const list = Array.isArray(payload)
+    ? payload
+    : Array.isArray((payload as { data?: unknown })?.data)
+      ? (payload as { data: unknown[] }).data
+      : Array.isArray((payload as { models?: unknown })?.models)
+        ? (payload as { models: unknown[] }).models
+        : []
+
+  return list
+    .map((entry): RawModel | null => {
+      if (typeof entry === 'string') return { id: entry, name: entry }
+      const item = entry as { id?: string; name?: string }
+      // 有的网关只回 name，id 要补上 —— 下游按 id 建索引与选中值。
+      const id = item?.id || item?.name
+      if (!id) return null
+      return { ...item, id, name: item.name || id }
+    })
+    .filter((m): m is RawModel => m !== null)
+}
+
+/** 打一次 GET {baseUrl}/models 验证连通性，顺带取回可用模型。 */
 export async function probeEndpoint(endpoint: ProviderEndpoint): Promise<ProbeOutcome> {
   if (!endpoint.apiKey) return { status: 'failed', reason: 'no-key' }
 
@@ -73,29 +104,9 @@ export async function probeEndpoint(endpoint: ProviderEndpoint): Promise<ProbeOu
   if (!result) return { status: 'failed', reason: 'proxy' }
   if (!result.ok) return { status: 'failed', reason: 'http', httpStatus: result.status }
 
-  let data: unknown
   try {
-    data = JSON.parse(result.data)
+    return { status: 'ok', models: toRawModels(JSON.parse(result.data)) }
   } catch {
     return { status: 'failed', reason: 'network' }
   }
-
-  const payload = data as { data?: unknown; models?: unknown }
-  const list = Array.isArray(data)
-    ? data
-    : Array.isArray(payload?.data)
-      ? payload.data
-      : Array.isArray(payload?.models)
-        ? payload.models
-        : []
-
-  const modelIds = list
-    .map((m: unknown) => {
-      if (typeof m === 'string') return m
-      const item = m as { id?: string; name?: string }
-      return item?.id || item?.name || ''
-    })
-    .filter(Boolean)
-
-  return { status: 'ok', modelIds }
 }

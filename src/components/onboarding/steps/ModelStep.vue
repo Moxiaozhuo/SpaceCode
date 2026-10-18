@@ -74,29 +74,28 @@
     <div class="ob-group-title">{{ t('onboarding.model.slots') }}</div>
     <div v-for="slot in SLOTS" :key="slot.key" class="ob-slot">
       <span>{{ t(slot.labelKey) }}</span>
-      <input
-        class="ob-input is-mono"
-        :list="modelIds.length ? MODEL_DATALIST_ID : undefined"
-        :value="activeConfig[slot.key]"
-        spellcheck="false"
-        @change="commitSlot(slot.key, ($event.target as HTMLInputElement).value)"
-      >
+      <SearchableSelect
+        :model-value="activeConfig[slot.key]"
+        :options="availableModels"
+        :z-index="1100"
+        @update:model-value="commitSlot(slot.key, $event)"
+      />
     </div>
-    <datalist v-if="modelIds.length" :id="MODEL_DATALIST_ID">
-      <option v-for="id in modelIds" :key="id" :value="id" />
-    </datalist>
-    <p class="ob-hint">{{ t('onboarding.model.slotNote') }}</p>
+    <p class="ob-hint">{{ fetching ? t('onboarding.model.fetching') : t('onboarding.model.slotNote') }}</p>
   </template>
 </template>
 
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { AlertTriangle, Check, Eye, EyeOff, Loader2 } from 'lucide-vue-next'
 import { useSettingsStore, type AuthMethod, type ProviderConfig } from '@/stores/settings'
 import { PROVIDER_PRESETS } from '@/lib/providerPresets'
-import { OAUTH_METHODS, defaultBaseUrlOf, probeEndpoint, resolveEndpoint } from '@/lib/providerConnection'
-import type { ProbeOutcome } from '@/lib/providerConnection'
+import SearchableSelect from '@/components/settings/SearchableSelect.vue'
+import type { EnrichedModel } from '@/lib/modelCatalog'
+import { loadProviderModels } from '@/lib/providerModels'
+import { OAUTH_METHODS, defaultBaseUrlOf, resolveEndpoint } from '@/lib/providerConnection'
+import type { ProbeFailure } from '@/lib/providerConnection'
 import { normalizeApiUrl } from '@/utils/apiUrl'
 
 const { t } = useI18n()
@@ -110,18 +109,19 @@ const METHOD_OPTIONS: ReadonlyArray<{ id: AuthMethod; name: string; color: strin
   { id: 'console', name: 'Console', color: '#5c5f7a', oauth: true }
 ]
 
-const SLOTS: ReadonlyArray<{ key: 'haikuModel' | 'sonnetModel' | 'opusModel'; labelKey: string }> = [
+type SlotKey = 'haikuModel' | 'sonnetModel' | 'opusModel'
+
+const SLOTS: ReadonlyArray<{ key: SlotKey; labelKey: string }> = [
   { key: 'sonnetModel', labelKey: 'onboarding.model.slotBalanced' },
   { key: 'opusModel', labelKey: 'onboarding.model.slotPowerful' },
   { key: 'haikuModel', labelKey: 'onboarding.model.slotFast' }
 ]
 
-const MODEL_DATALIST_ID = 'onboarding-model-ids'
-
 const showKey = ref(false)
 const probing = ref(false)
-const probeOutcome = ref<ProbeOutcome | null>(null)
-const modelIds = ref<string[]>([])
+const fetching = ref(false)
+const availableModels = ref<EnrichedModel[]>([])
+const probe = ref<{ count: number } | { reason: ProbeFailure } | null>(null)
 
 const isOAuthMethod = computed(() => OAUTH_METHODS.has(settingsStore.authMethod))
 
@@ -142,41 +142,59 @@ const presetIndex = computed(() => {
 
 const ready = computed(() => settingsStore.isConfigured)
 
-const endpoint = computed(() => resolveEndpoint(settingsStore.authMethod, configsSnapshot()))
+const endpoint = computed(() => resolveEndpoint(settingsStore.authMethod, {
+  anthropic: settingsStore.anthropicConfig,
+  openai: settingsStore.openaiConfig,
+  gemini: settingsStore.geminiConfig
+}))
 
-const endpointPath = computed(() => {
-  if (!endpoint.value) return ''
-  return `${normalizeApiUrl(endpoint.value.baseUrl, endpoint.value.target)}/models`
-})
+const endpointPath = computed(() =>
+  endpoint.value ? `${normalizeApiUrl(endpoint.value.baseUrl, endpoint.value.target)}/models` : ''
+)
+
+const probeOk = computed(() => !!probe.value && 'count' in probe.value)
 
 const probeMessage = computed(() => {
-  const outcome = probeOutcome.value
-  if (!outcome) return ''
-  if (outcome.status === 'ok') return t('onboarding.model.testOk', { count: outcome.modelIds.length })
-  if (outcome.reason === 'no-key') return t('onboarding.model.testNoKey')
-  if (outcome.reason === 'proxy') return t('onboarding.model.testProxy')
+  const result = probe.value
+  if (!result) return ''
+  if ('count' in result) return t('onboarding.model.testOk', { count: result.count })
+  if (result.reason === 'no-key') return t('onboarding.model.testNoKey')
+  if (result.reason === 'proxy') return t('onboarding.model.testProxy')
   return t('onboarding.model.testFailed')
 })
-
-const probeOk = computed(() => probeOutcome.value?.status === 'ok')
 
 function badgeKey(badgeType: 'recommended' | 'official'): string {
   return badgeType === 'official' ? 'auth.badgeOfficial' : 'auth.badgeRecommended'
 }
 
-function configsSnapshot() {
-  return {
-    anthropic: settingsStore.anthropicConfig,
-    openai: settingsStore.openaiConfig,
-    gemini: settingsStore.geminiConfig
+/** 拉一次列表填进下拉。silent=true 时不弹失败提示 —— 拉不通就退回兜底候选。 */
+async function refreshModels(silent: boolean) {
+  const target = endpoint.value
+  if (!target) return
+  fetching.value = true
+  try {
+    const result = await loadProviderModels(target, settingsStore.modelCapabilities)
+    availableModels.value = result.models
+    if (!silent) {
+      probe.value = result.fromEndpoint
+        ? { count: result.models.length }
+        : { reason: result.reason ?? 'network' }
+    }
+  } finally {
+    fetching.value = false
   }
 }
+
+watch(
+  () => `${settingsStore.authMethod}|${activeConfig.value.baseUrl}|${activeConfig.value.apiKey}`,
+  () => { void refreshModels(true) },
+  { immediate: true }
+)
 
 function selectMethod(next: AuthMethod) {
   if (OAUTH_METHODS.has(next) || settingsStore.authMethod === next) return
   settingsStore.authMethod = next
-  probeOutcome.value = null
-  modelIds.value = []
+  probe.value = null
   void settingsStore.saveSettings()
 }
 
@@ -189,29 +207,26 @@ function selectPreset(index: number) {
 
 function commitBaseUrl(event: Event) {
   activeConfig.value.baseUrl = (event.target as HTMLInputElement).value.trim()
-  probeOutcome.value = null
+  probe.value = null
   void settingsStore.saveSettings()
 }
 
 function commitApiKey(event: Event) {
   activeConfig.value.apiKey = (event.target as HTMLInputElement).value.trim()
-  probeOutcome.value = null
+  probe.value = null
   void settingsStore.saveSettings()
 }
 
-function commitSlot(key: 'haikuModel' | 'sonnetModel' | 'opusModel', value: string) {
-  activeConfig.value[key] = value.trim()
+function commitSlot(key: SlotKey, value: string) {
+  activeConfig.value[key] = value
   void settingsStore.saveSettings()
 }
 
 async function runTest() {
-  const target = endpoint.value
-  if (!target) return
+  if (!endpoint.value) return
   probing.value = true
-  probeOutcome.value = null
-  const outcome = await probeEndpoint(target)
-  probeOutcome.value = outcome
-  if (outcome.status === 'ok') modelIds.value = outcome.modelIds
+  probe.value = null
+  await refreshModels(false)
   probing.value = false
 }
 </script>
@@ -242,6 +257,12 @@ async function runTest() {
     color: var(--warning);
     font-weight: var(--font-weight-semibold);
   }
+}
+
+.ob-slot :deep(.select-trigger) {
+  padding: 8px 12px;
+  font-family: var(--font-mono);
+  font-size: var(--text-sm);
 }
 
 .spin {

@@ -115,10 +115,23 @@ describe('probeEndpoint', () => {
       vi.mocked(api.httpFetch).mockResolvedValue({ ok: true, status: 200, data })
       const outcome = await probeEndpoint({ target: 'openai', baseUrl: 'https://x.test/v1', apiKey: 'k' })
       expect(outcome.status).toBe('ok')
-      if (outcome.status === 'ok') ids.push(...outcome.modelIds)
+      if (outcome.status === 'ok') ids.push(...outcome.models.map(m => m.id))
     }
 
     expect(ids).toEqual(['a', 'b', 'c', 'd'])
+  })
+
+  it('端点自述的能力字段原样带出，供目录富化', async () => {
+    vi.mocked(api.httpFetch).mockResolvedValue({
+      ok: true, status: 200, data: '[{"id":"m1","context_length":200000,"input_modalities":["text","image"]}]'
+    })
+
+    const outcome = await probeEndpoint({ target: 'openai', baseUrl: 'https://x.test/v1', apiKey: 'k' })
+
+    expect(outcome.status).toBe('ok')
+    if (outcome.status === 'ok') {
+      expect(outcome.models[0]).toMatchObject({ id: 'm1', context_length: 200000 })
+    }
   })
 
   it('列表项可能是纯字符串', async () => {
@@ -126,6 +139,6 @@ describe('probeEndpoint', () => {
 
     const outcome = await probeEndpoint({ target: 'openai', baseUrl: 'https://x.test/v1', apiKey: 'k' })
 
-    expect(outcome).toEqual({ status: 'ok', modelIds: ['gpt-x'] })
+    expect(outcome).toEqual({ status: 'ok', models: [{ id: 'gpt-x', name: 'gpt-x' }] })
   })
 })

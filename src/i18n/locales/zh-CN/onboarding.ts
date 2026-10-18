@@ -82,6 +82,7 @@ export default {
     hideKey: '隐藏密钥',
     test: '测试连接',
     testing: '请求 /models 中',
+    fetching: '正在拉取模型列表…',
     testOk: '能用，拿到 {count} 个模型',
     testFailed: '不通，检查地址或 Key',
     testNoKey: '先填 API Key',

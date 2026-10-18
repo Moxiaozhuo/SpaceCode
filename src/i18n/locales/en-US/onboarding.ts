@@ -82,6 +82,7 @@ export default {
     hideKey: 'Hide key',
     test: 'Test connection',
     testing: 'Requesting /models',
+    fetching: 'Fetching the model list…',
     testOk: 'Working. {count} models returned',
     testFailed: 'Not working. Check URL or key',
     testNoKey: 'Add a key first',
