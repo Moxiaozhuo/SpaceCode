@@ -122,6 +122,31 @@ export function useTurnStore(injectedApi?: any) {
       jitterMs: 1_000,
     })
 
+    /**
+     * 放还一条被 auto-retry 停在 turnStates 里的 turn。
+     *
+     * handleError 的自动重试分支只置 `settled = true` 不 endTurn（重试还要用这个
+     * ts），所以重试一旦作废，必须有人把它从 map 里摘掉 —— 否则 sendMessage 的
+     * 「已有在飞 turn」检查会永久吞掉这个会话之后的每一条消息：用户消息已经贴上
+     * 屏幕，引擎却永远收不到，表现就是「发了没反应」。
+     *
+     * 只在自己仍然持有这条 turn 时收口：期间可能已被 abort 或新 turn 接管。
+     */
+    function releaseParkedTurn(sessionId: string, ts: TurnState): void {
+      if (turnStates.get(sessionId) !== ts) return
+      ts.settled = true
+      // parked 的 ts 带着 sendMessage 那次调用的 resolve，不调它那条 Promise 永远悬着
+      ts.resolve?.()
+      endTurn(sessionId, ts)
+      loadingSessions.value.set(sessionId, false)
+      streamingContents.value.set(sessionId, '')
+      const s = sink.get(sessionId)
+      if (s) {
+        s.processStatus = 'idle'
+        sink.persist(sessionId)
+      }
+    }
+
     async function initiateAutoRetry(
       sessionId: string,
       ts: TurnState,
@@ -134,6 +159,12 @@ export function useTurnStore(injectedApi?: any) {
       const state = autoRetry.recordRetryableError(sessionId, errorCategory, errorTitle, errorMessage, retryDelayHint, ts.assistantMessageId, errorCode)
       const attempt = state.attempt
       const delayMs = state.delayMs
+
+      /** 这条重试作废了：交还 turn，别让它继续挡住后续消息 */
+      const giveUp = (): void => {
+        autoRetry.removeRetryState(sessionId)
+        releaseParkedTurn(sessionId, ts)
+      }
 
       sessionStore.logger.info('ChatStore', `[${sessionId.slice(0, 8)}] auto-retry scheduled | attempt=${attempt}/${state.maxRetries} | delay=${delayMs}ms | category=${errorCategory}`)
 
@@ -160,19 +191,20 @@ export function useTurnStore(injectedApi?: any) {
       const cur = autoRetry.retryStates.value.get(sessionId)
       if (!cur || cur.aborted) {
         sessionStore.logger.info('ChatStore', `[${sessionId.slice(0, 8)}] auto-retry aborted by user`)
+        giveUp()
         return
       }
 
       // ④ 获取上一条用户消息
       const session = sink.get(sessionId)
       if (!session) {
-        autoRetry.removeRetryState(sessionId)
+        giveUp()
         return
       }
 
       const lastUserMsg = [...session.messages].reverse().find(m => m.role === 'user')
       if (!lastUserMsg) {
-        autoRetry.removeRetryState(sessionId)
+        giveUp()
         return
       }
 
@@ -474,10 +506,17 @@ export function useTurnStore(injectedApi?: any) {
 
       sessionStore.logger.info('ChatStore', `sendMessage: calling IPC sendMessage | sessionId=${targetSessionId.slice(0, 8)}`)
 
-      if (turnStates.has(targetSessionId)) {
-        sessionStore.logger.warn('ChatStore', `sendMessage: a turn is already in flight for this session, skipping new turn setup | sessionId=${targetSessionId.slice(0, 8)}`)
-        pendingSendMessages.delete(targetSessionId)
-        return
+      const inFlight = turnStates.get(targetSessionId)
+      if (inFlight) {
+        if (!inFlight.settled) {
+          sessionStore.logger.warn('ChatStore', `sendMessage: a turn is already in flight for this session, skipping new turn setup | sessionId=${targetSessionId.slice(0, 8)}`)
+          pendingSendMessages.delete(targetSessionId)
+          return
+        }
+        // settled 的是停在退避里的僵尸（见 releaseParkedTurn）。用户消息此刻已经
+        // 贴上屏幕，在这里 return 就等于把它吞掉 —— 收口后照常开新回合。
+        sessionStore.logger.warn('ChatStore', `sendMessage: reclaiming a settled turn parked by a cancelled retry | sessionId=${targetSessionId.slice(0, 8)}`)
+        releaseParkedTurn(targetSessionId, inFlight)
       }
 
       await new Promise<void>((resolve, reject) => {
@@ -617,7 +656,11 @@ export function useTurnStore(injectedApi?: any) {
         autoRetry.removeRetryState(sid)
 
         const ts = turnStates.get(sid)
-        if (ts && !ts.settled) {
+        if (ts) {
+          // settled 却仍挂在 map 上 = auto-retry 停在退避里的 turn（handleError 只置
+          // settled 不 endTurn）。用户按停止就是要它出局，这里必须照样收口 —— 否则
+          // 之后每条消息都会被 sendMessage 的在飞检查静默吞掉。
+          const wasLive = !ts.settled
           ts.settled = true
           ts.resolve?.()
           // 中止的回合不走 result 事件：未结束的 thinking 必须在此收口
@@ -630,9 +673,12 @@ export function useTurnStore(injectedApi?: any) {
             s.processStatus = 'idle'
             sink.persist(sid)
           }
-          // ── Turn 结局订阅点 — aborted（用户主动中止） ──
-          for (const listener of turnOutcomeListeners) {
-            try { listener(sid, 'aborted') } catch { /* listener 错误不影响 abort 流程 */ }
+          // ── Turn 结局订阅点 — aborted（用户主动中止）──
+          // 只通知真正在飞的回合；停在退避里的僵尸从未被订阅方当成活动 turn。
+          if (wasLive) {
+            for (const listener of turnOutcomeListeners) {
+              try { listener(sid, 'aborted') } catch { /* listener 错误不影响 abort 流程 */ }
+            }
           }
         }
 
