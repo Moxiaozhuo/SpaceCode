@@ -8,6 +8,8 @@
  * - 扁平方法（无子命名空间的方法）保留在此文件
  * - 通过 spread 组合命名空间对象到 api 导出
  */
+import type { ThinkingUpdateTiming } from '@/shared/channels/claudeCode'
+
 import type {
   CuaDriverStatus,
   CuaDriverUpdateInfo,
@@ -633,11 +635,13 @@ export const api = {
   },
 
   // ClaudeCode bridge methods (flat, delegating to electronAPI.claudeCode)
-  updateThinkingLevel: (sessionId: string, enabled: boolean): Promise<void> => {
+  // 返回引擎的生效时机（now / next-turn），失败按 reject 上抛 —— 调用方要据此回退开关。
+  updateThinkingLevel: (sessionId: string, enabled: boolean): Promise<ThinkingUpdateTiming> => {
     if (electronAPI?.claudeCode?.updateThinkingLevel) {
       return electronAPI.claudeCode.updateThinkingLevel(sessionId, enabled)
     }
-    return Promise.resolve()
+    // 无桥接（纯浏览器预览）时没有引擎可失配：按"已生效"答，别给没有会话的用户报错。
+    return Promise.resolve('now')
   },
 
   getContextUsage: (sessionId: string): Promise<Record<string, unknown> | undefined> => {

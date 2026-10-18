@@ -83,11 +83,18 @@
             <span>{{ t('chatInput.messageSteered') }}</span>
           </div>
         </Transition>
-        <!-- 思考开关延后生效提示浮层 -->
+        <!-- 思考开关生效时机 / 失败提示浮层 -->
         <Transition name="stash-fade">
-          <div v-if="showThinkingHint" class="steer-hint">
-            <Sparkles :size="14" />
-            <span>{{ t('chatInput.thinkingAppliesNextTurn') }}</span>
+          <div
+            v-if="thinkingHint"
+            class="steer-hint"
+            :class="{ 'steer-hint-error': thinkingHint.isError }"
+            role="status"
+            aria-live="polite"
+          >
+            <AlertTriangle v-if="thinkingHint.isError" :size="14" />
+            <Sparkles v-else :size="14" />
+            <span>{{ thinkingHint.text }}</span>
           </div>
         </Transition>
       </div>
@@ -242,7 +249,7 @@ import { ref, computed, onMounted, onBeforeUnmount, onUnmounted, watch, nextTick
 import {
   ArrowUp, Plus, Square, X,
   Loader2, Zap, FolderOpen, Brain,
-  Sparkles, Image, Archive, LayoutGrid
+  Sparkles, Image, Archive, LayoutGrid, AlertTriangle
 } from 'lucide-vue-next'
 import { useSettingsStore } from '@/stores/settings'
 import ChatContextToolbar from './ChatContextToolbar.vue'
@@ -474,7 +481,7 @@ const { editorSessionId, saveDraftForSession, loadDraftForSession, restoreStashD
 
 // ── Local state (not extracted) ──────────────────────────────────
 const showSteerHint = ref(false)
-const showThinkingHint = ref(false)
+const thinkingHint = ref<{ text: string; isError: boolean } | null>(null)
 const thinkingEnabled = ref(settingsStore.thinkingEnabled)
 const contextMenuRef = ref<InstanceType<typeof ContextMenu> | null>(null)
 
@@ -536,23 +543,64 @@ function sendPendingNow(msgId: string) {
 }
 
 // ── Thinking toggle ──────────────────────────────────────────────
+let thinkingHintTimer: ReturnType<typeof setTimeout> | undefined
+
+function flashThinkingHint(text: string, isError: boolean) {
+  thinkingHint.value = { text, isError }
+  if (thinkingHintTimer) clearTimeout(thinkingHintTimer)
+  thinkingHintTimer = setTimeout(() => { thinkingHint.value = null }, isError ? 4000 : 2500)
+}
+
+/**
+ * 把开关退回用户点击前的状态。
+ *
+ * 只在"用户眼前还是这次要点的那个选择"时回退：期间又点过一次就别盖掉后来的决定。
+ * 回退要再落一次盘 —— localStorage 在上一次保存时已经写过新值，不重写的话刷新又回到没生效的状态。
+ */
+async function revertThinking(from: boolean) {
+  if (thinkingEnabled.value !== from) return
+  thinkingEnabled.value = !from
+  settingsStore.thinkingEnabled = thinkingEnabled.value
+  const rolled = await settingsStore.saveSettings()
+  // 回滚期间的二次失败比原始失败次要：只记日志，不拿它盖掉真正的失败原因。
+  if (!rolled.success) console.error('[ChatInput] Failed to roll back thinking setting:', rolled.error)
+}
+
 async function toggleThinking() {
   thinkingEnabled.value = !thinkingEnabled.value
   settingsStore.thinkingEnabled = thinkingEnabled.value
+  const intent = thinkingEnabled.value
 
   // 两条都要等：主进程的配置（代理对齐在它后面）和正在跑的引擎会话。
-  // 之前都是 fire-and-forget，界面显示"已开"时这两边可能还是旧值。
-  await settingsStore.saveSettings()
+  // 等还不够，结果必须读 —— 任何一边没落地都要把开关退回去，界面不能停在"看着已开"。
+  const saved = await settingsStore.saveSettings()
+  if (!saved.success) {
+    await revertThinking(intent)
+    flashThinkingHint(t('chatInput.thinkingSaveFailed'), true)
+    return
+  }
+
   const sid = editorSessionId.value
+  let appliesLater = false
   if (sid) {
     // --thinking 只在进程 spawn 时读一次：本轮进行中时不打断，进程会在本轮结束后
-    // 挂起、下一条消息以新参数恢复。这里把"要等下一轮"如实告诉用户。
-    const turnInFlight = turnStore.getIsLoading(sid)
-    await api.updateThinkingLevel(sid, thinkingEnabled.value).catch(() => {})
-    if (turnInFlight) {
-      showThinkingHint.value = true
-      setTimeout(() => { showThinkingHint.value = false }, 2500)
+    // 挂起、下一条消息以新参数恢复。以引擎的答复为准，而不是自己猜会话是否忙。
+    try {
+      appliesLater = (await api.updateThinkingLevel(sid, intent)) === 'next-turn'
+    } catch (err) {
+      console.error('[ChatInput] updateThinkingLevel failed:', err)
+      await revertThinking(intent)
+      flashThinkingHint(t('chatInput.thinkingApplyFailed'), true)
+      return
     }
+  }
+
+  // 一个提示槽位，失败/告警优先于"下一轮生效"这种信息：配置落盘了但代理没对齐，
+  // 用户更该知道的是前者。
+  if (saved.proxyState === 'failed') {
+    flashThinkingHint(t('chatInput.thinkingProxyFailed'), true)
+  } else if (appliesLater) {
+    flashThinkingHint(t('chatInput.thinkingAppliesNextTurn'), false)
   }
 }
 
@@ -1153,6 +1201,7 @@ onMounted(() => {
 onUnmounted(() => {
   window.removeEventListener('session-created', focusEditor)
   window.removeEventListener('chip-image-preview', handleChipImagePreview as EventListener)
+  if (thinkingHintTimer) clearTimeout(thinkingHintTimer)
 })
 
 // Before the DOM is torn down (e.g. when navigating to settings), stash the
@@ -1401,6 +1450,11 @@ defineExpose({ getContent, setContent, focus: focusEditor })
   z-index: 10;
   pointer-events: none;
   box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+}
+
+// 开关没能生效时的同位提示：红底，避免用户把"点了"当成"生效了"
+.steer-hint-error {
+  background: var(--error);
 }
 
 // 提示词优化进行中文字提示

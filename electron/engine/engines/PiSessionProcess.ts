@@ -323,14 +323,19 @@ export class PiSessionProcess extends EventEmitter {
   }
 
   async setThinkingLevel(level: string): Promise<void> {
-    if (!this._process) return
+    if (!this._process) {
+      // 子进程已经没了：这条设置谁都收不到。静默 return 会让上层以为"已下发"，
+      // 界面就停在一个从没生效的开关上。
+      throw new Error(`Pi session ${this.sessionId.slice(0, 8)} has no running process to apply thinking level`)
+    }
 
     info('PiSessionProcess', `[${this.sessionId.slice(0, 8)}] Setting thinking level | level=${level}`)
     try {
       const message = JSON.stringify({ type: 'set_thinking_level', level }) + '\n'
       this._process.stdin?.write(message)
     } catch (err) {
-      warn('PiSessionProcess', `[${this.sessionId.slice(0, 8)}] Set thinking level failed`, err)
+      // 写不进去就是没生效，别降级成 warn 冒充成功。
+      throw new Error(`Failed to write set_thinking_level to pi: ${err instanceof Error ? err.message : String(err)}`)
     }
   }
 

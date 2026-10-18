@@ -480,12 +480,14 @@ describe('PiSessionProcess kill, suspend, resume', () => {
     expect(proc.getPiSessionFile()).toBeNull()
   })
 
-  it('ignores suspend, abort and thinking-level requests before there is a process', async () => {
+  it('没有进程时 suspend 与 abort 尽力而为，thinking 请求则如实失败', async () => {
     const proc = newProc()
 
     await proc.suspend()
     await proc.abort()
-    await proc.setThinkingLevel('high')
+    // 这两个丢了还有超时与退出事件收尾；思考开关是用户刚点的那一下，静默 return 会被
+    // 上层读成「已下发」，界面就停在一条从没送出的设置上（issue #49）。
+    await expect(proc.setThinkingLevel('high')).rejects.toThrow(/no running process/)
 
     expect(proc.status).toBe('starting')
     expect(H.spawnCalls).toHaveLength(0)
@@ -552,23 +554,20 @@ describe('PiSessionProcess kill, suspend, resume', () => {
     )
   })
 
-  it('warns instead of throwing when a control frame cannot be written', async () => {
+  it('控制帧写不进去时：abort 尽力而为，set_thinking_level 必须抛出', async () => {
     const { proc, child } = await startUp()
     child.stdinWrite.mockImplementation(() => {
       throw new Error('EPIPE: write after end')
     })
 
     await expect(proc.abort()).resolves.toBeUndefined()
-    await expect(proc.setThinkingLevel('medium')).resolves.toBeUndefined()
+    // abort 只是这一轮的收尾，丢了还有超时兜底；思考开关没有别的回收路径 ——
+    // 静默 resolve 会让上层把「没送出去」读成「已生效」（issue #49）。
+    await expect(proc.setThinkingLevel('medium')).rejects.toThrow('EPIPE: write after end')
 
     expect(loggerWarn).toHaveBeenCalledWith(
       'PiSessionProcess',
       expect.stringContaining(`[${SHORT_ID}] Abort failed`),
-      expect.any(Error),
-    )
-    expect(loggerWarn).toHaveBeenCalledWith(
-      'PiSessionProcess',
-      expect.stringContaining(`[${SHORT_ID}] Set thinking level failed`),
       expect.any(Error),
     )
   })
