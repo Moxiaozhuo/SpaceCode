@@ -465,17 +465,62 @@ describe('PiSessionProcess kill, suspend, resume', () => {
   it('writes the abort and thinking-level control frames verbatim', async () => {
     const { proc, child } = await startUp()
 
-    await proc.abort()
+    // abort 走 rpcRequest：带 id，且要等引擎 ack；thinking-level 仍是写完即返回的一帧
+    const aborting = proc.abort()
+    feed(child, JSON.stringify({ type: 'response', id: 'req_1', command: 'abort', success: true }) + '\n')
+    await aborting
     await proc.setThinkingLevel('off')
 
     expect(writtenFrames(child)).toEqual([
-      { type: 'abort' },
+      { id: 'req_1', type: 'abort' },
       { type: 'set_thinking_level', level: 'off' },
     ])
     expect(child.stdinWrite.mock.calls.map((call) => String(call[0]))).toEqual([
-      '{"type":"abort"}\n',
+      '{"id":"req_1","type":"abort"}\n',
       '{"type":"set_thinking_level","level":"off"}\n',
     ])
+  })
+
+  it('abort 在引擎 ack 之前一直等，ack 到达才返回', async () => {
+    const { proc, child } = await startUp()
+
+    const aborting = proc.abort()
+    let settled = false
+    void aborting.then(() => { settled = true })
+    await vi.advanceTimersByTimeAsync(9_000)
+    expect(settled).toBe(false)
+
+    feed(child, JSON.stringify({ type: 'response', id: 'req_1', command: 'abort', success: true }) + '\n')
+    await aborting
+    expect(settled).toBe(true)
+  })
+
+  it('abort 的 ack 超时只告警不抛', async () => {
+    const { proc } = await startUp()
+
+    const aborting = proc.abort()
+    await vi.advanceTimersByTimeAsync(10_000)
+    await expect(aborting).resolves.toBeUndefined()
+
+    expect(loggerWarn).toHaveBeenCalledWith(
+      'PiSessionProcess',
+      expect.stringContaining(`[${SHORT_ID}] Abort failed`),
+      expect.any(Error),
+    )
+  })
+
+  it('进程在 abort 等待期间退出时不抛错', async () => {
+    const { proc, child } = await startUp()
+
+    const aborting = proc.abort()
+    child.child.emit('exit', 1, null)
+    await expect(aborting).resolves.toBeUndefined()
+
+    expect(loggerWarn).toHaveBeenCalledWith(
+      'PiSessionProcess',
+      expect.stringContaining(`[${SHORT_ID}] Abort failed`),
+      expect.any(Error),
+    )
   })
 
   it('warns instead of throwing when a control frame cannot be written', async () => {
@@ -507,7 +552,9 @@ describe('PiSessionProcess prompt round-trip', () => {
     const sending = proc.sendMessage('summarize this')
     expect(child.stdinWrite).toHaveBeenCalledTimes(1)
     expect(String(child.stdinWrite.mock.calls[0][0]).endsWith('\n')).toBe(true)
-    expect(writtenFrames(child)).toEqual([{ id: 'req_1', type: 'prompt', message: 'summarize this' }])
+    expect(writtenFrames(child)).toEqual([
+      { id: 'req_1', type: 'prompt', message: 'summarize this', streamingBehavior: 'followUp' },
+    ])
     expect(proc.status).toBe('active')
     expect(proc.canSafelySuspend()).toBe(false)
 
@@ -608,6 +655,7 @@ describe('PiSessionProcess prompt attachments', () => {
         id: 'req_1',
         type: 'prompt',
         message: 'Please analyze the attached images.',
+        streamingBehavior: 'followUp',
         images: [{ type: 'image', data: b64, mimeType: 'image/png' }],
       },
     ])

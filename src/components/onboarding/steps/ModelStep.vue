@@ -180,6 +180,11 @@ async function refreshModels(silent: boolean) {
         ? { count: result.models.length }
         : { reason: result.reason ?? 'network' }
     }
+  } catch (e) {
+    console.error('[ModelStep] Failed to load provider models:', e)
+    if (!silent) {
+      probe.value = { reason: 'network' }
+    }
   } finally {
     fetching.value = false
   }

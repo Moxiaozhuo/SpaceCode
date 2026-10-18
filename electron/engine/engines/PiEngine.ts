@@ -76,7 +76,7 @@ export class PiEngine implements IEngine {
 
   async abort(sessionId: string): Promise<void> {
     info('PiEngine', `abort | sessionId=${sessionId.slice(0, 8)}`)
-    this.pool.abortSession(sessionId)
+    await this.pool.abortSession(sessionId)
   }
 
   async stop(sessionId: string): Promise<void> {

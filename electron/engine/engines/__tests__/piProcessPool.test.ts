@@ -425,13 +425,27 @@ describe('会话控制面', () => {
     expect(proc.sendMessage).toHaveBeenCalledWith('hello', [IMG])
   })
 
-  it('abortSession：无条目静默，有条目转发', async () => {
+  it('abortSession：无条目静默，有条目转发并等引擎确认停止', async () => {
     const { pool } = makePool()
-    expect(() => pool.abortSession('ghost')).not.toThrow()
+    await expect(pool.abortSession('ghost')).resolves.toBeUndefined()
 
     const [proc] = await seedSessions(pool, 1)
-    pool.abortSession('seed-0')
+    let releaseAbort!: () => void
+    ;(proc.abort as ReturnType<typeof vi.fn>).mockImplementation(
+      () => new Promise<void>((resolve) => { releaseAbort = resolve }),
+    )
+
+    let settled = false
+    const aborting = pool.abortSession('seed-0').then(() => { settled = true })
+    await Promise.resolve()
+
     expect(proc.abort).toHaveBeenCalledTimes(1)
+    // 引擎的 abort ack 没回来之前，池不许声称"已经停了"—— 渲染层的重发就靠这个串行
+    expect(settled).toBe(false)
+
+    releaseAbort()
+    await aborting
+    expect(settled).toBe(true)
   })
 
   it('suspendSession 转发挂起并路由 user_request 事件', async () => {

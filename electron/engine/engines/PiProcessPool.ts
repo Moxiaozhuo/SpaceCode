@@ -114,12 +114,12 @@ export class PiProcessPool {
     await proc.sendMessage(content, images)
   }
 
-  abortSession(sessionId: string): void {
+  async abortSession(sessionId: string): Promise<void> {
     const proc = this.processes.get(sessionId)
     if (!proc) return
 
     info('PiProcessPool', `[${sessionId.slice(0, 8)}] Aborting session`)
-    proc.abort()
+    await proc.abort()
   }
 
   suspendSession(sessionId: string): void {

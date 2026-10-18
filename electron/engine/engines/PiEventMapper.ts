@@ -150,10 +150,18 @@ export function mapPiEvent(sessionId: string, event: PiAgentEvent): UnifiedEngin
       }
 
     case 'auto_retry_start':
+      // 渲染层的重试卡片只读 api_retry 那套字段。原来这里发的是 pi 的原始 subtype，
+      // 于是引擎正在退避重试而 UI 全程静默 —— 429 看起来就是「卡住没响应」。
       return {
         sessionId,
         type: 'system',
-        data: { subtype: 'auto_retry_start', attempt: event.attempt, maxAttempts: event.maxAttempts },
+        data: {
+          subtype: 'api_retry',
+          attempt: event.attempt,
+          maxRetries: event.maxAttempts,
+          retryInMs: event.delayMs,
+          error: event.errorMessage || 'API error',
+        },
       }
 
     case 'auto_retry_end':

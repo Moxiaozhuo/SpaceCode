@@ -311,10 +311,32 @@ describe('mapPiEvent — 系统与终止事件', () => {
       subtype: 'thinking_level_changed', level: 'high',
     })
     expect(mapPiEvent(SID, { type: 'auto_retry_start', attempt: 2, maxAttempts: 5 })?.data).toEqual({
-      subtype: 'auto_retry_start', attempt: 2, maxAttempts: 5,
+      subtype: 'api_retry', attempt: 2, maxRetries: 5, error: 'API error',
     })
     expect(mapPiEvent(SID, { type: 'auto_retry_end', success: true, attempt: 2 })?.data).toEqual({
       subtype: 'auto_retry_end', success: true, attempt: 2,
+    })
+  })
+
+  // 渲染层的重试卡片只读 api_retry 这套字段（src/stores/turn/index.ts 的 onSystem）。
+  // pi 的 auto_retry_start 若不换成这个形状，引擎在退避重试时 UI 全程静默。
+  it('auto_retry_start 换成渲染层的 api_retry 载荷', () => {
+    expect(mapPiEvent(SID, {
+      type: 'auto_retry_start',
+      attempt: 1,
+      maxAttempts: 3,
+      delayMs: 2000,
+      errorMessage: '429 rate limit exceeded on dimension: rpm',
+    })).toEqual({
+      sessionId: SID,
+      type: 'system',
+      data: {
+        subtype: 'api_retry',
+        attempt: 1,
+        maxRetries: 3,
+        retryInMs: 2000,
+        error: '429 rate limit exceeded on dimension: rpm',
+      },
     })
   })
 

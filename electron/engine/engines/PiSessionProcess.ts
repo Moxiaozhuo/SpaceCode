@@ -233,6 +233,11 @@ export class PiSessionProcess extends EventEmitter {
         {
           type: 'prompt',
           message: finalContent,
+          // Pi 在 run 进行中收到不带该字段的 prompt 帧会直接抛
+          // "Agent is already processing..."，这条消息就被引擎丢掉了 —— 而宿主此时
+          // 往往已经因为一次 429 结算了 turn，两边对「引擎是否在跑」的判断并不一致。
+          // followUp 让引擎排到当前 run 之后再执行；引擎空闲时该字段被忽略。
+          streamingBehavior: 'followUp',
           ...(inlineImages.length > 0 ? { images: inlineImages } : {}),
         },
         30000,
@@ -300,8 +305,10 @@ export class PiSessionProcess extends EventEmitter {
 
     info('PiSessionProcess', `[${this.sessionId.slice(0, 8)}] Aborting current operation`)
     try {
-      const message = JSON.stringify({ type: 'abort' }) + '\n'
-      this._process.stdin?.write(message)
+      // 等 ack 而不是写完就算停：pi 的 session.abort() 内部 await waitForIdle()，
+      // acked 才代表这一轮真的一次性收尾了。自动重试靠它在重发前串行，
+      // 否则重发会撞上还在拆解的 run。超时与进程退出只告警，维持尽力而为的语义。
+      await this.rpcRequest(this._process, { type: 'abort' }, 10_000, 'Timeout waiting for abort response')
     } catch (err) {
       warn('PiSessionProcess', `[${this.sessionId.slice(0, 8)}] Abort failed`, err)
     }

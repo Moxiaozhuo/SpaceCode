@@ -99,6 +99,43 @@ describe('Turn engine retry lifecycle', () => {
     await vi.runAllTimersAsync()
   })
 
+  // 引擎（Pi）自己也在为 429 退避重试。应用侧自动重试不等它确认停止就重发，
+  // 那条 prompt 会撞上仍在 streaming 的 run 被引擎整条丢掉 —— 用户看到「发了没反应」。
+  it('auto-retry 重发前先等引擎确认停止', async () => {
+    const fake = makeFakeApi()
+    const order: string[] = []
+    fake.claudeCode.abort = vi.fn(async () => { order.push('abort') })
+    fake.claudeCode.sendMessage = vi.fn((sid: string) => {
+      order.push('send')
+      queueMicrotask(() => fake._handlers.onResult?.({ sessionId: sid, data: {} }))
+      return Promise.resolve(undefined)
+    })
+
+    const { useTurnStore } = await import('../turn')
+    const turn = useTurnStore(fake as any)
+    const sessionStore = useChatSessionStore()
+    const sessionId = 'sess-retry-abort-order'
+    sessionStore.createSession('Test', undefined, sessionId)
+    sessionStore.addMessage({ role: 'user', content: 'go' }, sessionId)
+
+    vi.spyOn(errorHandler, 'classifyError').mockReturnValue({
+      category: ErrorCategory.RATE_LIMIT,
+      title: '请求过于频繁',
+      message: '请求过于频繁',
+      technicalDetail: '429 too many requests',
+      retryable: true,
+      originalError: new Error('429 too many requests'),
+      timestamp: Date.now(),
+    })
+
+    ;(turn as any).beginTurn(sessionId, { isAutonomous: false })
+    fake._handlers.onError?.({ sessionId, data: { message: '429 too many requests' } })
+    await vi.runAllTimersAsync()
+
+    // 最后一次 send 之前必须有一次被 await 的 abort
+    expect(order.slice(-2)).toEqual(['abort', 'send'])
+  })
+
   it('normalizes engine api_retry events and ignores synthetic API error content', async () => {
     const fake = makeFakeApi()
     const { useTurnStore } = await import('../turn')
