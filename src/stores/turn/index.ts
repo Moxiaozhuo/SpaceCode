@@ -16,7 +16,7 @@ import {
   isSidechainMessage,
 } from '@/services/teamTranscriptService'
 import { useAutoRetry } from '@/composables/useAutoRetry'
-import type { TurnState } from './types'
+import type { PendingMessage, TurnState } from './types'
 import { createTimelineAssembler } from './timelineAssembler'
 import { createTurnStateMachine } from './turnStateMachine'
 import { createEventHandlers, isSyntheticApiErrorAssistant } from './eventHandlers'
@@ -80,15 +80,6 @@ export function useTurnStore(injectedApi?: any) {
     // ────────────────────────────────────────────────────────────────────
     // Pending Messages（任务 9 从 chatStream.ts 迁移）
     // ────────────────────────────────────────────────────────────────────
-    interface PendingMessage {
-      id: string
-      content: string
-      attachments: { name: string; path: string; isFolder: boolean }[]
-      images: { id: string; name: string; type: 'image'; mimeType: string; previewUrl: string; data: string }[]
-      displayLabel?: string
-      priority: 'now' | 'later'
-      createdAt: number
-    }
     const pendingMessages = ref<Map<string, PendingMessage[]>>(new Map())
 
     function addPendingMessage(sessionId: string, msg: PendingMessage) {
@@ -197,9 +188,16 @@ export function useTurnStore(injectedApi?: any) {
       // ⑥ 结束当前 turn（不报错），为重试腾出位置
       turnStates.delete(sessionId)
 
+      // ⑥′ 重发前先等引擎确认停止。Pi 默认自己也做 429 退避重试，两个重试循环并行时
+      // 这条重发会撞上仍在 streaming 的 run，被引擎判成 "Agent is already processing"
+      // 并整条丢弃 —— 用户看到的就是「发了没反应」。
+      const claudeCode = resolvedApi.claudeCode
+      try {
+        await claudeCode?.abort(sessionId)
+      } catch { /* 尽力而为：停不下来仍可由引擎侧排队兜住 */ }
+
       // ⑦ 确保引擎进程存活：429 等错误会导致子进程退出
       try {
-        const claudeCode = resolvedApi.claudeCode
         if (claudeCode) {
           const status = await claudeCode.getSessionStatus(sessionId)
           if (!status?.isRunning || status?.status === 'exited') {
