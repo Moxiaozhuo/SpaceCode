@@ -40,11 +40,19 @@ export class PiSessionProcess extends EventEmitter {
   private _requestId: number = 0
   private _pendingRequests: Map<string, { resolve: (response: any) => void; reject: (error: Error) => void }> = new Map()
 
-  constructor(sessionId: string, config: EngineSessionConfig) {
+  /** pi 自己生成的会话文件名：构造时由池注入以接上历史，运行中由 get_state 补记 */
+  private _piSessionFile: string | null
+
+  /**
+   * @param resumeSessionFile 由池按历史记录注入的 pi 会话文件；不传则起一个空白会话。
+   *   走构造参数而不是 config —— config 要跨 IPC，这个路径只该由主进程决定。
+   */
+  constructor(sessionId: string, config: EngineSessionConfig, resumeSessionFile?: string) {
     super()
     this.sessionId = sessionId
     this.config = config
-    debug('PiSessionProcess', `Constructed | sessionId=${sessionId.slice(0, 8)} | cwd=${config.cwd} | provider=${config.provider} | model=${config.model}`)
+    this._piSessionFile = resumeSessionFile ?? null
+    debug('PiSessionProcess', `Constructed | sessionId=${sessionId.slice(0, 8)} | cwd=${config.cwd} | provider=${config.provider} | model=${config.model}${resumeSessionFile ? ` | resume=${resumeSessionFile}` : ''}`)
   }
 
   async start(): Promise<void> {
@@ -326,9 +334,6 @@ export class PiSessionProcess extends EventEmitter {
     }
   }
 
-  /** pi 自己生成的会话文件名（由 get_state 回报）。挂起会把进程丢掉，恢复时靠它带 --session 续上历史。 */
-  private _piSessionFile: string | null = null
-
   /**
    * 写一帧 RPC 并按 id 等它的 response。进程在等待期间退出时由 exit 处理器统一 reject。
    */
@@ -363,10 +368,14 @@ export class PiSessionProcess extends EventEmitter {
   /**
    * 向在飞的进程要一次 get_state 并记下它的会话文件。
    * 拿不到不影响本轮，只是恢复时退回到「新会话」——不阻塞挂起。
+   *
+   * 超时由调用方定：挂起路径要快，进程刚起来那次的探测可以等久一些 ——
+   * pi 装载扩展与模型表可能就要十几秒，这一趟问早了只会白问。
    */
-  private async captureSessionFile(proc: ChildProcess): Promise<void> {
+  async captureSessionFile(timeoutMs = 3000): Promise<void> {
+    if (!this._process) return
     try {
-      const response = await this.rpcRequest(proc, { type: 'get_state' }, 3000, 'Timeout waiting for session state')
+      const response = await this.rpcRequest(this._process, { type: 'get_state' }, timeoutMs, 'Timeout waiting for session state')
       const sessionFile = response?.data?.sessionFile
       if (response?.success && typeof sessionFile === 'string' && sessionFile) {
         this._piSessionFile = sessionFile
@@ -392,7 +401,7 @@ export class PiSessionProcess extends EventEmitter {
     // 不能让别人把这条会话当成还在跑的进程复用掉。
     this.status = 'suspended'
     const proc = this._process
-    await this.captureSessionFile(proc)
+    await this.captureSessionFile()
     proc.stdin?.end()
     this._process = null
   }
@@ -878,7 +887,7 @@ export class PiSessionProcess extends EventEmitter {
     }
     if (this.config.apiKey) args.push('--api-key', this.config.apiKey)
     if (this.config.thinkingEnabled) args.push('--thinking', 'medium')
-    // 挂起过的会话：把 pi 自己的会话文件带回去，否则恢复出来的是一个没有历史的新会话
+    // 带上 pi 自己的会话文件，否则新进程起来就是一个没有历史的新会话
     if (this._piSessionFile) args.push('--session', this._piSessionFile)
     if (this.config.systemPrompt) args.push('--system-prompt', this.config.systemPrompt)
     if (this.config.appendSystemPrompt) args.push('--append-system-prompt', this.config.appendSystemPrompt)

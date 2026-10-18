@@ -25,7 +25,9 @@ import { killTree as mockedKillTree } from '../../../session/engineChildProcess'
  *   - in-flight prompt requests rejected with the last stderr lines when the child dies
  *   - kill / suspend / resume / abort control frames and the suspend-safety gate,
  *     including that a suspend records Pi's own session file so the respawn can
- *     carry `--session` back into it
+ *     carry `--session` back into it — and that a session file handed to the
+ *     constructor (the pool read it off disk after an app restart) goes straight
+ *     into the spawn args
  *   - attachment handling: inlinable images ride in the prompt frame's `images`
  *     field (a `@"path"` reference loses the pixels on non-Anthropic gateways),
  *     only unsupported types fall back to the upload dir, and a broken data URL
@@ -117,15 +119,23 @@ const BASE: EngineSessionConfig = { cwd: '/ws', provider: 'anthropic', model: 'c
 
 let open: PiSessionProcess[] = []
 
-function newProc(config: Partial<EngineSessionConfig> = {}, sessionId = SESSION_ID): PiSessionProcess {
-  const proc = new PiSessionProcess(sessionId, { ...BASE, ...config })
+function newProc(
+  config: Partial<EngineSessionConfig> = {},
+  sessionId = SESSION_ID,
+  resumeSessionFile?: string,
+): PiSessionProcess {
+  const proc = new PiSessionProcess(sessionId, { ...BASE, ...config }, resumeSessionFile)
   open.push(proc)
   return proc
 }
 
 /** Runs start() through its 500 ms grace window on a faked clock. */
-async function startUp(config: Partial<EngineSessionConfig> = {}, sessionId = SESSION_ID) {
-  const proc = newProc(config, sessionId)
+async function startUp(
+  config: Partial<EngineSessionConfig> = {},
+  sessionId = SESSION_ID,
+  resumeSessionFile?: string,
+) {
+  const proc = newProc(config, sessionId, resumeSessionFile)
   const starting = proc.start()
   await vi.advanceTimersByTimeAsync(500)
   await starting
@@ -449,6 +459,25 @@ describe('PiSessionProcess kill, suspend, resume', () => {
       'PiSessionProcess',
       expect.stringContaining(`[${SHORT_ID}] get_state returned no sessionFile`),
     )
+  })
+
+  it('构造时由池注入的会话文件直接进 spawn 参数 —— 重启应用后靠它接上历史', async () => {
+    const piFile = '/home/u/.pi/agent/sessions/--ws--/2026-10-18T12-55-29-647Z_abc.jsonl'
+
+    await startUp({}, SESSION_ID, piFile)
+
+    expect(H.spawnCalls[0].args).toEqual([
+      DEV_CLI, '--mode', 'rpc', '--provider', 'anthropic', '--model', 'claude-sonnet-4', '--session', piFile,
+    ])
+  })
+
+  it('没有进程时探测会话文件直接收口，不往 stdin 写帧', async () => {
+    const proc = newProc()
+
+    await expect(proc.captureSessionFile(30_000)).resolves.toBeUndefined()
+
+    expect(H.spawnCalls).toHaveLength(0)
+    expect(proc.getPiSessionFile()).toBeNull()
   })
 
   it('ignores suspend, abort and thinking-level requests before there is a process', async () => {

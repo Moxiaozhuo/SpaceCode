@@ -14,6 +14,7 @@ import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest'
  *  - 图片是不是作为 image_url 进了请求体（而不是 @"路径"）
  *  - 用户配的 32000 上下文窗口有没有被模型注册信息采用
  *  - 挂起再恢复之后，第二次请求体里还在不在第一轮的用户消息
+ *  - 进程整个换掉（应用重启那条路）之后，只凭会话文件路径还接不接得上历史
  *
  * 不进 CI：需要本机装有 @mariozechner/pi-coding-agent，且会起子进程。显式跑：
  *   PI_REAL=1 npx vitest run electron/engine/engines/__tests__/piSessionProcess.realPi.test.ts
@@ -128,7 +129,7 @@ function waitForTurnEnd(proc: PiSessionProcess, timeoutMs = 90_000): Promise<voi
   })
 }
 
-function makeProcess(sessionId: string): PiSessionProcess {
+function makeProcess(sessionId: string, resumeSessionFile?: string): PiSessionProcess {
   const config: EngineSessionConfig = {
     cwd: workspace,
     provider: 'openai',
@@ -139,7 +140,7 @@ function makeProcess(sessionId: string): PiSessionProcess {
     engineType: 'pi',
     modelContextWindows: { [MODEL]: 32000 },
   }
-  const proc = new PiSessionProcess(sessionId, config)
+  const proc = new PiSessionProcess(sessionId, config, resumeSessionFile)
   proc.on('error', () => {})
   return proc
 }
@@ -220,5 +221,36 @@ describe.skipIf(!ENABLED)('真 pi 子进程核验', () => {
     expect(lastRequest).toContain(PNG_B64)
 
     await proc.kill()
+  }, 240_000)
+
+  it('进程被丢掉重建（应用重启那条路）后，带 --session 的新进程还接得上第一轮', async () => {
+    const proc = makeProcess('pi-probe-restart')
+    await proc.start()
+
+    const firstTurn = waitForTurnEnd(proc)
+    await proc.sendMessage(TURN1)
+    await firstTurn
+    expect(captured[captured.length - 1]).toContain('banana')
+
+    // 不问一次 get_state 就没人知道这份历史写在哪个文件上 —— 这个动作原先只有挂起路径有
+    await proc.captureSessionFile(30_000)
+    const sessionFile = proc.getPiSessionFile()
+    expect(sessionFile, '没问到 pi 的会话文件').toMatch(/\.jsonl$/)
+
+    await proc.kill() // 模拟应用退出：进程连同它内存里那份路径一起没了
+
+    const beforeRespawn = captured.length
+    const respawned = makeProcess('pi-probe-restart', sessionFile!)
+    await respawned.start()
+    const secondTurn = waitForTurnEnd(respawned)
+    await respawned.sendMessage(TURN2)
+    await secondTurn
+
+    const respawnRequests = captured.slice(beforeRespawn)
+    const lastRequest = respawnRequests[respawnRequests.length - 1]
+    expect(lastRequest).toContain(TURN2)
+    expect(lastRequest, '重建的进程没把第一轮历史带进去').toContain('banana')
+
+    await respawned.kill()
   }, 240_000)
 })
