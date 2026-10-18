@@ -1,6 +1,7 @@
 // @vitest-environment node
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
 import * as path from 'path'
+import { fileURLToPath } from 'url'
 import { SessionProcess, type SessionConfig } from '../sessionProcess'
 
 /**
@@ -199,7 +200,44 @@ describe('resolveCliCommand — precedence', () => {
  * long context with neither collapsing nor auto-compaction, which is why the engine's own
  * default build keeps it commented out (engine/scripts/defines.ts). The two source-launch
  * paths must not re-enable it.
+ *
+ * The same file is the authoritative ceiling for the whole hand-copied list: every flag the
+ * engine comments out carries a recorded disable reason, and `getFeatureArgs()` re-lighting
+ * one reproduces the CONTEXT_COLLAPSE failure mode — silent, discovered only by users. So the
+ * copy is checked against the engine rather than against someone's memory. `engine/` is
+ * read-only (AGENTS.md); reading it here mutates nothing.
  */
+const ENGINE_DEFINES = fileURLToPath(new URL('../../../engine/scripts/defines.ts', import.meta.url))
+
+/** Client-only opt-ins: engine defaults exclude them, product code depends on them. */
+const CLIENT_ONLY_FEATURES: string[] = [
+  // src/lib/tool-registry.ts advertises the WebBrowser tool on this flag; the engine's tool is a
+  // self-contained fetch reader with no Bun-only dependency, so it works under both launchers.
+  'WEB_BROWSER_TOOL',
+  // electron/skills/skillsService.ts exposes the bundled `claude-api` skill, which the engine
+  // registers only under this flag (src/skills/bundled/index.ts).
+  'BUILDING_CLAUDE_APPS',
+]
+
+function parseDefaultBuildFeatures(source: string): { enabled: string[]; disabled: string[] } {
+  const declared = source.slice(source.indexOf('export const DEFAULT_BUILD_FEATURES'))
+  const body = declared.slice(declared.indexOf('[') + 1, declared.indexOf(']'))
+  const enabled: string[] = []
+  const disabled: string[] = []
+  for (const line of body.split('\n')) {
+    const names = [...line.matchAll(/'([A-Z][A-Z0-9_]*)'/g)].map((m) => m[1])
+    if (/^\s*\/\//.test(line)) disabled.push(...names)
+    else enabled.push(...names)
+  }
+  return { enabled, disabled }
+}
+
+async function readEngineFeatures() {
+  // 'fs' is mocked away for the launcher under test, so the engine file needs the real one.
+  const { readFileSync } = await vi.importActual<typeof import('fs')>('node:fs')
+  return parseDefaultBuildFeatures(readFileSync(ENGINE_DEFINES, 'utf8'))
+}
+
 describe('resolveCliCommand — feature args', () => {
   it.each([
     { label: 'dev source path', isPackaged: false },
@@ -212,6 +250,26 @@ describe('resolveCliCommand — feature args', () => {
 
     expect(features).toContain('BUDDY')
     expect(features).not.toContain('CONTEXT_COLLAPSE')
+  })
+
+  it.each([
+    { label: 'dev source path', isPackaged: false },
+    { label: 'packaged src-fallback path', isPackaged: true },
+  ])('keeps the $label feature list inside the engine default list', async ({ isPackaged }) => {
+    runtime.isPackaged = isPackaged
+    exists.add(SRC)
+
+    const features = enabledFeatures(resolve().args)
+    const { enabled, disabled } = await readEngineFeatures()
+
+    // guards the guard: a parser that silently matched nothing would pass every assertion below
+    expect(enabled).toContain('BUDDY')
+    expect(disabled).toContain('CONTEXT_COLLAPSE')
+
+    expect(features.filter((f) => disabled.includes(f))).toEqual([])
+    expect(features.filter((f) => !enabled.includes(f) && !CLIENT_ONLY_FEATURES.includes(f))).toEqual([])
+    // an allowlist entry the engine has since adopted hides real drift — keep it honest
+    expect(CLIENT_ONLY_FEATURES.filter((f) => enabled.includes(f))).toEqual([])
   })
 })
 

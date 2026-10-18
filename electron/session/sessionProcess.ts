@@ -1969,7 +1969,10 @@ export class SessionProcess extends EventEmitter {
   }
 
   private getFeatureArgs(): string[] {
-    // CONTEXT_COLLAPSE 刻意缺席：引擎侧仍是空壳 stub，启用它会抑制 auto compact（理由见 sessionProcess.resolveCli.test.ts）
+    // 本名单是 engine/scripts/defines.ts 的 DEFAULT_BUILD_FEATURES（权威）的手抄子集，
+    // 只用于源码启动的 dev / packaged src-fallback 两条路径；越界由 resolveCli.test.ts 拦下。
+    // CONTEXT_COLLAPSE / HISTORY_SNIP / FORK_SUBAGENT / UDS_INBOX / LAN_PIPES 缺席 = 引擎注释里写明的禁用理由。
+    // PROACTIVE 缺席 = 引擎 43 处闸全是 feature('PROACTIVE') || feature('KAIROS')，KAIROS 已开，单传它无效果。
     const features = [
       'BUDDY', 'TRANSCRIPT_CLASSIFIER', 'BRIDGE_MODE',
       'AGENT_TRIGGERS_REMOTE', 'CHICAGO_MCP', 'VOICE_MODE',
@@ -1977,10 +1980,10 @@ export class SessionProcess extends EventEmitter {
       'AGENT_TRIGGERS', 'ULTRATHINK', 'BUILTIN_EXPLORE_PLAN_AGENTS',
       'LODESTONE', 'EXTRACT_MEMORIES', 'VERIFICATION_AGENT',
       'KAIROS_BRIEF', 'AWAY_SUMMARY', 'ULTRAPLAN', 'DAEMON',
-      'WORKFLOW_SCRIPTS', 'HISTORY_SNIP',
-      'MONITOR_TOOL', 'FORK_SUBAGENT', 'UDS_INBOX', 'KAIROS',
-      'COORDINATOR_MODE', 'LAN_PIPES', 'POOR',
-      'PROACTIVE', 'WEB_BROWSER_TOOL', 'BUILDING_CLAUDE_APPS',
+      'WORKFLOW_SCRIPTS', 'MONITOR_TOOL', 'KAIROS',
+      'COORDINATOR_MODE', 'POOR',
+      // 引擎默认不开、客户端产品面依赖的两个，逐条理由见 resolveCli.test.ts 的 CLIENT_ONLY_FEATURES
+      'WEB_BROWSER_TOOL', 'BUILDING_CLAUDE_APPS',
     ]
     return features.flatMap(f => ['--feature', f])
   }
