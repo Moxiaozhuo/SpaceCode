@@ -22,6 +22,7 @@
         :style="{ display: appStore.sidebarCollapsed || appStore.infoPanelFullscreen ? 'none' : 'block' }"
       ></div>
       <div class="center-panel" v-show="!appStore.infoPanelFullscreen">
+        <OnboardingBanner v-if="!appStore.showSettings" />
         <div class="center-content">
           <KeepAlive v-if="appStore.showSettings">
             <SettingsPanel />
@@ -74,6 +75,7 @@
       v-model:visible="appStore.showConnectMobile"
     />
     <WorkspaceOnboarding v-if="appStore.showWorkOnboarding" />
+    <OnboardingWizard v-if="onboarding.visible" />
     <FileQuickOpen v-if="appStore.showFileQuickOpen" />
     <DialogProvider />
     <SelectionActionBar />
@@ -86,12 +88,15 @@ import { useI18n } from 'vue-i18n'
 import { useAppStore } from '@/stores/app'
 import { useChatSessionStore } from '@/stores/chatSession'
 import { useSettingsStore } from '@/stores/settings'
+import { useOnboardingStore } from '@/stores/onboarding'
 import { useFontStore } from '@/stores/font'
 import { useSplitLayoutStore } from '@/stores/splitLayout'
 import { usePetStore } from '@/stores/pet'
+import { applyAccentColor, applyDensity, resolveEffectiveTheme } from '@/lib/appearanceSync'
 import TitleBar from './components/layout/TitleBar.vue'
 import Sidebar from './components/layout/Sidebar.vue'
 import SplitContainer from './components/layout/SplitContainer.vue'
+import OnboardingBanner from './components/onboarding/OnboardingBanner.vue'
 import DialogProvider from './components/common/DialogProvider.vue'
 import SelectionActionBar from './components/common/SelectionActionBar.vue'
 import AsyncLoadingState from './components/common/AsyncLoadingState.vue'
@@ -150,12 +155,14 @@ const McpManager = lazyPage(() => import('./components/mcp/McpManager.vue'))
 const CronManager = lazyPage(() => import('./components/cron/CronManager.vue'))
 const WorkAssistantGallery = lazyPage(() => import('./components/work/WorkAssistantGallery.vue'))
 const WorkspaceOnboarding = lazyPage(() => import('./components/work/WorkspaceOnboarding.vue'))
+const OnboardingWizard = lazyPage(() => import('./components/onboarding/OnboardingWizard.vue'))
 const ConnectMobileDialog = lazyPage(() => import('./components/mobile/ConnectMobileDialog.vue'))
 const FileQuickOpen = lazyPage(() => import('./components/layout/FileQuickOpen.vue'))
 
 const appStore = useAppStore()
 const sessionStore = useChatSessionStore()
 const settingsStore = useSettingsStore()
+const onboarding = useOnboardingStore()
 const splitLayout = useSplitLayoutStore()
 const petStore = usePetStore()
 const { t } = useI18n()
@@ -544,12 +551,13 @@ onMounted(() => {
   document.documentElement.setAttribute('data-theme', appStore.theme)
 
   watch(() => settingsStore.appearance.theme, (newTheme) => {
-    let effectiveTheme = newTheme
-    if (newTheme === 'system') {
-      effectiveTheme = window.matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'
-    }
-    appStore.setTheme(effectiveTheme as 'light' | 'dark' | 'anthropic' | 'anthropic-dark')
+    appStore.setTheme(resolveEffectiveTheme(newTheme))
   }, { immediate: true })
+
+  // 强调色与密度此前只在外观设置页挂载过时才打到 documentElement，
+  // 重启后回到主题默认值；引导向导要求它们即时生效，故统一收到这里。
+  watch(() => settingsStore.appearance.accentColor, applyAccentColor, { immediate: true })
+  watch(() => settingsStore.appearance.density, applyDensity, { immediate: true })
 
   // 监听菜单事件
   api.onMenuOpenFolder((path: string) => {

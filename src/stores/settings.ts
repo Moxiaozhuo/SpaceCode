@@ -90,6 +90,8 @@ export interface AuthSettings {
   /** 用户最近一次在输入框下拉中选择的模型（实际模型名，非别名）。
    *  持久化以避免 GUI 重启后回退到 sonnet 槽位。 */
   lastSelectedModel?: string
+  /** 首次启动引导是否已走完（走完或用户明确「不再提醒」）。 */
+  hasCompletedOnboarding?: boolean
 }
 
 const SETTINGS_STORAGE_KEY = 'claude_desktop_settings'
@@ -319,6 +321,11 @@ export const useSettingsStore = defineStore('settings', () => {
   const aiSessionTitleEnabled = ref<boolean>(saved.aiSessionTitleEnabled ?? false)
   const showSkillsManagerEntry = ref<boolean>(saved.showSkillsManagerEntry ?? false)
   const lastSelectedModel = ref<string>(saved.lastSelectedModel || '')
+  const hasCompletedOnboarding = ref<boolean>(saved.hasCompletedOnboarding === true)
+
+  /** gui-settings.json / .env 的异步读取是否已经落定。
+   *  首启动判定必须等它 — 否则标记还在默认 false，会给所有老用户误弹引导。 */
+  const settingsReady = ref(false)
 
   // ── Profile 管理（多套模型配置切换）──
   const profiles = ref<ModelProfile[]>([])
@@ -552,7 +559,8 @@ export const useSettingsStore = defineStore('settings', () => {
       rtkEnabled: rtkEnabled.value,
       aiSessionTitleEnabled: aiSessionTitleEnabled.value,
       showSkillsManagerEntry: showSkillsManagerEntry.value,
-      lastSelectedModel: lastSelectedModel.value || undefined
+      lastSelectedModel: lastSelectedModel.value || undefined,
+      hasCompletedOnboarding: hasCompletedOnboarding.value
     }
 
     const serialized = JSON.stringify(data, null, 2)
@@ -826,6 +834,7 @@ export const useSettingsStore = defineStore('settings', () => {
     if (settings.rtkEnabled !== undefined) rtkEnabled.value = settings.rtkEnabled
     if (settings.aiSessionTitleEnabled !== undefined) aiSessionTitleEnabled.value = settings.aiSessionTitleEnabled
     if (settings.showSkillsManagerEntry !== undefined) showSkillsManagerEntry.value = settings.showSkillsManagerEntry
+    if (settings.hasCompletedOnboarding !== undefined) hasCompletedOnboarding.value = settings.hasCompletedOnboarding
   }
 
   async function loadFromGuiSettingsFile() {
@@ -928,6 +937,7 @@ export const useSettingsStore = defineStore('settings', () => {
   loadFromGuiSettingsFile()
     .finally(() => loadFromEnv())
     .finally(() => migrateFontSizeDefault())
+    .finally(() => { settingsReady.value = true })
 
   return {
     authMethod,
@@ -969,6 +979,8 @@ export const useSettingsStore = defineStore('settings', () => {
     aiSessionTitleEnabled,
     showSkillsManagerEntry,
     lastSelectedModel,
+    hasCompletedOnboarding,
+    settingsReady,
     // Profile 管理
     profiles,
     activeProfileId,
