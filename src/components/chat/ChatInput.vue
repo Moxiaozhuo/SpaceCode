@@ -1294,7 +1294,9 @@ defineExpose({ getContent, setContent, focus: focusEditor })
   }
 
   &.is-sending {
-    > :not(.composer-status-bar) {
+    // 工具栏内的下拉是后代节点，祖先 opacity 会连整棵子树一起合成，
+    // 面板压不到 1 就会透出底下的聊天流 —— 压暗只针对内容区，不含工具栏
+    > :not(.composer-status-bar):not(.input-toolbar) {
       opacity: 0.8;
     }
   }
