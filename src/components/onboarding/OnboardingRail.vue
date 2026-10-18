@@ -1,7 +1,7 @@
 <template>
   <aside class="rail">
     <div class="brand">
-      <span class="mark">S</span>
+      <img class="mark" :src="appIcon" alt="SpaceCode" />
       <span class="name">{{ t('onboarding.brand') }}</span>
     </div>
 
@@ -40,6 +40,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Check } from 'lucide-vue-next'
 import { useOnboardingStore, SETTING_UP_STEPS, STEP_COUNT } from '@/stores/onboarding'
+import appIcon from '@/assets/app-icon.svg'
 
 const { t } = useI18n()
 const onboarding = useOnboardingStore()
@@ -74,13 +75,8 @@ const currentKey = computed(() => {
     width: 24px;
     height: 24px;
     border-radius: var(--radius-sm);
-    background: linear-gradient(140deg, var(--accent-primary), var(--accent-secondary));
-    display: grid;
-    place-items: center;
-    color: #fff;
-    font-family: var(--font-serif);
-    font-weight: var(--font-weight-semibold);
-    font-size: var(--text-md);
+    object-fit: contain;
+    flex: none;
   }
 
   .name {

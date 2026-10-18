@@ -6,7 +6,7 @@
       <div class="ob-main">
         <template v-if="onboarding.view === 'intro'">
           <div class="ob-intro">
-            <span class="ob-intro-mark">S</span>
+            <img class="ob-intro-mark" :src="appIcon" alt="SpaceCode" />
             <h1>{{ t('onboarding.intro.title') }}</h1>
             <p class="ob-intro-sub">{{ t('onboarding.intro.subtitle') }}</p>
             <div class="ob-prep">
@@ -72,6 +72,7 @@ import EngineStep from './steps/EngineStep.vue'
 import ModelStep from './steps/ModelStep.vue'
 import WorkspaceStep from './steps/WorkspaceStep.vue'
 import SummaryStep from './steps/SummaryStep.vue'
+import appIcon from '@/assets/app-icon.svg'
 
 const { t } = useI18n()
 const onboarding = useOnboardingStore()
@@ -128,6 +129,9 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
   height: min(580px, calc(100vh - 64px));
   display: grid;
   grid-template-columns: 212px 1fr;
+  // 隐式行默认 auto，会跟着内容长高，于是超出的部分被卡片的 overflow:hidden 剪掉，
+  // 里面的 .ob-body 永远等不到滚动 —— 模型这一步内容比卡片高时就是这样。
+  grid-template-rows: minmax(0, 1fr);
   background: var(--bg-elevated);
   border: 1px solid var(--border-default);
   border-radius: var(--radius-xl);
@@ -174,13 +178,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
     width: 52px;
     height: 52px;
     border-radius: var(--radius-lg);
-    background: linear-gradient(140deg, var(--accent-primary), var(--accent-secondary));
-    display: grid;
-    place-items: center;
-    color: #fff;
-    font-family: var(--font-serif);
-    font-weight: 700;
-    font-size: 25px;
+    object-fit: contain;
     box-shadow: var(--shadow-md);
   }
 
@@ -273,6 +271,7 @@ onUnmounted(() => window.removeEventListener('keydown', onKeydown))
 
 .ob-body {
   flex: 1;
+  min-height: 0;
   overflow-y: auto;
   padding: 18px 26px 8px;
 
