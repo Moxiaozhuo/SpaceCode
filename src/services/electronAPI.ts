@@ -50,6 +50,15 @@ export interface ArtifactEntry {
   mtime: number
 }
 
+/**
+ * `artifacts:startWatch` 的如实回报（issue #44）：
+ * `watching=false` 表示实时推送不可用（一个 watcher 都没建成）。
+ */
+export interface ArtifactsWatchStatus {
+  watching: boolean
+  watchCount: number
+}
+
 export interface PreviewPage {
   path: string
   role: string

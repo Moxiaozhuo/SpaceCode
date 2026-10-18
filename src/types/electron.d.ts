@@ -20,6 +20,7 @@ import type {
   ProxyStatus,
   InstallProgress,
   ArtifactEntry,
+  ArtifactsWatchStatus,
   DesignSystemSummary,
 } from '@/services/electronAPI'
 import type { GitRendererApi } from '@/shared/channels/git'
@@ -125,7 +126,7 @@ export interface ElectronArtifactsAPI {
   list: (workingDir: string, options?: { scanWorkspaceRoot?: boolean }) => Promise<{ artifacts: ArtifactEntry[] }>
   open: (filePath: string) => Promise<{ success: boolean; error?: string }>
   reveal: (filePath: string) => Promise<{ success: boolean }>
-  startWatch: (artifactsDir: string) => Promise<boolean>
+  startWatch: (artifactsDir: string) => Promise<ArtifactsWatchStatus>
   stopWatch: () => Promise<boolean>
   onChanged: (callback: (data: { eventType: string; filename: string }) => void) => () => void
 }

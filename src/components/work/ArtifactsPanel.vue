@@ -119,17 +119,40 @@ watch(currentSessionId, () => {
 watch(workingDir, () => {
   refresh()
   // 重启 watcher 以监听新目录
-  if (workingDir.value) {
-    api.artifacts.startWatch(workingDir.value)
-  }
+  void restartWatch()
 })
+
+// watcher 一个都没建成时（罕见：fs.watch 整体失败）退回 3s 轮询，
+// 列表仍能自动更新；watching=true 时撤销轮询（issue #44）。
+let pollTimer: ReturnType<typeof setInterval> | null = null
+
+function applyWatchStatus(watching: boolean): void {
+  if (watching) {
+    if (pollTimer) {
+      clearInterval(pollTimer)
+      pollTimer = null
+    }
+  } else if (!pollTimer) {
+    pollTimer = setInterval(() => {
+      if (!loading.value) void refresh()
+    }, 3000)
+  }
+}
+
+async function restartWatch(): Promise<void> {
+  if (!workingDir.value) return
+  try {
+    const status = await api.artifacts.startWatch(workingDir.value)
+    applyWatchStatus(status.watching)
+  } catch {
+    applyWatchStatus(false)
+  }
+}
 
 onMounted(() => {
   refresh()
   // Phase 6: 使用 fs.watch 实时推送替换 3s 轮询
-  if (workingDir.value) {
-    api.artifacts.startWatch(workingDir.value)
-  }
+  void restartWatch()
   unsubscribe = api.artifacts.onChanged(() => {
     refresh()
   })
@@ -139,6 +162,10 @@ onBeforeUnmount(() => {
   if (unsubscribe) {
     unsubscribe()
     unsubscribe = null
+  }
+  if (pollTimer) {
+    clearInterval(pollTimer)
+    pollTimer = null
   }
   api.artifacts.stopWatch()
 })
