@@ -38,6 +38,12 @@
         </div>
       </div>
     </Transition>
+
+    <BypassPermissionsDialog
+      :show="bypassConfirmOpen"
+      @confirm="settleBypassConfirm(true)"
+      @cancel="settleBypassConfirm(false)"
+    />
   </div>
 </template>
 
@@ -46,6 +52,7 @@ import { ref, computed, onMounted, onUnmounted } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Shield, ChevronDown, Check, Eye, Edit3, Zap } from 'lucide-vue-next'
 import { usePermissionPolicyStore } from '@/stores/permissionPolicy'
+import BypassPermissionsDialog from './BypassPermissionsDialog.vue'
 import type { PermissionMode } from '@/shared/channels/claudeCode'
 
 const props = defineProps<{
@@ -98,17 +105,33 @@ const currentModeLabel = computed(() =>
 )
 
 async function selectMode(mode: PermissionMode) {
-  if (mode === currentMode.value) {
-    isOpen.value = false
-    return
-  }
+  isOpen.value = false
+
+  if (mode === currentMode.value) return
+  // 完全信任会把之后的每一次工具调用静默放行，切换前必须让用户看清它开到哪一层。
+  if (mode === 'bypassPermissions' && !(await confirmBypassPermissions())) return
 
   if (props.modelValue !== undefined) {
     emit('update:modelValue', mode)
   } else {
     await policyStore.setPermissionMode(props.sessionId, mode)
   }
-  isOpen.value = false
+}
+
+const bypassConfirmOpen = ref(false)
+let settleBypass: ((granted: boolean) => void) | null = null
+
+function confirmBypassPermissions(): Promise<boolean> {
+  bypassConfirmOpen.value = true
+  return new Promise((resolve) => {
+    settleBypass = resolve
+  })
+}
+
+function settleBypassConfirm(granted: boolean) {
+  bypassConfirmOpen.value = false
+  settleBypass?.(granted)
+  settleBypass = null
 }
 
 function toggleDropdown() {
