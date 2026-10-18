@@ -251,6 +251,21 @@ describe('createCronSessionRunner', () => {
     expect(f.listenerCount()).toBe(0)
   })
 
+  it('传进来的 signal 已经取消时，不拉起引擎、不投递提示词、不记成功', async () => {
+    const f = fakeDeps()
+    const controller = new AbortController()
+    controller.abort()
+
+    const run = createCronSessionRunner(f.deps)('p', '/w', testContext({ signal: controller.signal }))
+
+    // 已取消的 signal 不会重放 abort 回调，收口只能靠进来时那一次判读
+    await expect(run).resolves.toEqual({ exitCode: null, stdout: '', stderr: 'Execution cancelled' })
+    expect(f.recorder.pushSession).not.toHaveBeenCalled()
+    expect(f.recorder.startSession).not.toHaveBeenCalled()
+    expect(f.recorder.sendMessage).not.toHaveBeenCalled()
+    expect(f.listenerCount()).toBe(0)
+  })
+
   it('超时中断不再投递提示词，并结束已拉起的引擎进程', async () => {
     let resolveStart: (v: null) => void = () => {}
     const f = fakeDeps({ startSession: () => new Promise<null>((r) => { resolveStart = r }) })

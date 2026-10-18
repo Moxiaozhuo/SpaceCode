@@ -150,6 +150,14 @@ export function createCronSessionRunner(
 
     signal.addEventListener('abort', onAbort, { once: true })
 
+    // 已经取消的 signal 不会再叫第二次 abort 回调（AbortSignal 不重放），所以只能
+    // 在这里收口：下面到 startSession 之间没有 await，漏过这一句就会照旧拉起引擎
+    // 进程、投递提示词，最后被 result 记成 completed。
+    if (signal.aborted) {
+      finish(null, '', 'Execution cancelled')
+      return
+    }
+
     deps.pushSession({
       sessionId,
       content: prompt,
