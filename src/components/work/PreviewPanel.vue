@@ -231,31 +231,37 @@ const availableModes = computed(() => {
   ]
 })
 
+/**
+ * 一轮渲染的世代号，html / 截图 / watch 三种模式共用一个计数。
+ * 切文件或切模式都会重启一轮，迟到的旧轮次一律不得写回状态——否则就是
+ * 「标题已经是 B.xlsx、预览还是 A.xlsx」。watch 那一轮尤其不能只是丢弃结果：
+ * 那个句柄没人记得，主进程的 officecli 常驻子进程就漏在那里。
+ */
+let renderRun = 0
+
 async function renderHtml() {
+  const run = ++renderRun
+  const filePath = props.filePath
   loading.value = true
   errorMsg.value = ''
   try {
-    const htmlPath = await api.officecli.viewHtml(props.filePath)
+    const htmlPath = await api.officecli.viewHtml(filePath)
+    if (run !== renderRun) return
     htmlPreviewUrl.value = pathToFileURL(htmlPath)
   } catch (err) {
+    if (run !== renderRun) return
     errorMsg.value = extractErrorMessage(err)
     console.error('[OfficePreview] HTML render failed:', err)
   } finally {
-    loading.value = false
+    if (run === renderRun) loading.value = false
   }
 }
-
-/**
- * 一轮截图渲染的世代号。一轮要串行走好几个数秒的渲染，期间切文件或切模式都会
- * 重启一轮；迟到的旧轮次必须停止追加，否则两轮的分页会混进同一个列表。
- */
-let screenshotRun = 0
 
 /** 每块 8 页 × ~7s，12 块已近 90s；再往上只可能是主进程报回了荒谬的页数。 */
 const MAX_SCREENSHOT_CHUNKS = 12
 
 async function renderScreenshots() {
-  const run = ++screenshotRun
+  const run = ++renderRun
   const filePath = props.filePath
   const tmpDir = `${filePath}.screenshots`
   loading.value = true
@@ -269,7 +275,7 @@ async function renderScreenshots() {
     while (start <= pageCount && chunks < MAX_SCREENSHOT_CHUNKS) {
       const sheet = await api.officecli.viewScreenshot(filePath, tmpDir, start)
       const dataUrl = await api.officecli.readImageAsDataURL(sheet.path)
-      if (run !== screenshotRun) return
+      if (run !== renderRun) return
       const pages = Math.max(1, sheet.end - sheet.start + 1)
       // 尺寸读不出来就没法裁；此时整张图当一页，别让每页重复展示同一条长图。
       const sliceable = sheet.height > 0 && pages > 1
@@ -293,11 +299,11 @@ async function renderScreenshots() {
       chunks += 1
     }
   } catch (err) {
-    if (run !== screenshotRun) return
+    if (run !== renderRun) return
     errorMsg.value = extractErrorMessage(err)
     console.error('[OfficePreview] Screenshot render failed:', err)
   } finally {
-    if (run === screenshotRun) loading.value = false
+    if (run === renderRun) loading.value = false
   }
 }
 
@@ -314,17 +320,26 @@ function pageSheetStyle(page: ScreenshotPage) {
 }
 
 async function startWatch() {
+  const run = ++renderRun
+  const filePath = props.filePath
   loading.value = true
   errorMsg.value = ''
   try {
-    const handle = await api.officecli.watchStart(props.filePath)
+    const handle = await api.officecli.watchStart(filePath)
+    if (run !== renderRun) {
+      // 这一句之前主进程已经在跑那个子进程了，而切模式/卸载的清理只认 watchId，
+      // 迟到轮次若不主动 stop，句柄就永久没人回收。
+      void api.officecli.watchStop(handle.id).catch(() => {})
+      return
+    }
     watchId.value = handle.id
     watchUrl.value = handle.url
   } catch (err) {
+    if (run !== renderRun) return
     errorMsg.value = extractErrorMessage(err)
     console.error('[OfficePreview] Watch start failed:', err)
   } finally {
-    loading.value = false
+    if (run === renderRun) loading.value = false
   }
 }
 
@@ -434,10 +449,14 @@ function onArtifactsChanged() {
   rerenderDebounceTimer = setTimeout(async () => {
     rerenderDebounceTimer = null
     if (currentMode.value !== 'html') return
+    const run = ++renderRun
+    const filePath = props.filePath
     try {
-      const htmlPath = await api.officecli.viewHtml(props.filePath)
+      const htmlPath = await api.officecli.viewHtml(filePath)
+      if (run !== renderRun) return
       htmlPreviewUrl.value = pathToFileURL(htmlPath)
     } catch (err) {
+      if (run !== renderRun) return
       console.error('[OfficePreview] Re-render failed:', err)
     }
   }, 800)
@@ -451,18 +470,20 @@ watch(() => props.filePath, async (newPath) => {
 
 onMounted(async () => {
   const initialMode = appStore.officePreviewMode || 'html'
-  await switchMode(initialMode)
-  // 监听产物文件变更，实现实时刷新预览
+  // 订阅必须在首轮渲染之前落定：首轮要跑数秒，期间关掉面板的话，
+  // 排在 await 之后注册的监听再也没有实例去摘它。
   artifactsUnsubscribe = api.artifacts.onChanged(() => {
     onArtifactsChanged()
   })
+  await switchMode(initialMode)
 })
 
-onBeforeUnmount(async () => {
+onBeforeUnmount(() => {
+  // 作废在飞轮次：迟到的 startWatch 会自己把句柄 stop 掉，而不是写进一个没人清理的实例。
+  renderRun++
   if (watchId.value) {
-    try {
-      await api.officecli.watchStop(watchId.value)
-    } catch { /* ignore */ }
+    void api.officecli.watchStop(watchId.value).catch(() => {})
+    watchId.value = ''
   }
   if (artifactsUnsubscribe) {
     artifactsUnsubscribe()
