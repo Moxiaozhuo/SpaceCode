@@ -153,6 +153,95 @@ export function getOfficeCliInstalledBinary(): string {
   return path.join(getOfficeCliInstallDir(), exe)
 }
 
+// ===== User-level copy freshness =====
+
+/** Outcome of reconciling ~/.officecli/bin with the binary this app ships. */
+export interface OfficeCliSyncResult {
+  copied: boolean
+  reason: 'missing' | 'outdated' | 'up-to-date' | 'no-bundle' | 'unknown-version' | 'copy-failed'
+  bundledVersion: string | null
+  installedVersion: string | null
+}
+
+/** Run `<binary> --version` and pull the dotted version out of its output. */
+function readOfficeCliVersion(binaryPath: string): string | null {
+  try {
+    const result = spawnSync(binaryPath, ['--version'], {
+      timeout: 5000,
+      windowsHide: true,
+      encoding: 'utf-8',
+    })
+    if (result.status !== 0 || !result.stdout) return null
+    const match = result.stdout.trim().match(/\d+\.\d+\.\d+/)
+    return match ? match[0] : null
+  } catch {
+    return null
+  }
+}
+
+/** Numeric-segment compare: >0 when `a` outranks `b`. */
+function compareOfficeCliVersions(a: string, b: string): number {
+  const pa = a.split('.').map(Number)
+  const pb = b.split('.').map(Number)
+  for (let i = 0; i < Math.max(pa.length, pb.length); i++) {
+    const diff = (pa[i] || 0) - (pb[i] || 0)
+    if (diff !== 0) return diff
+  }
+  return 0
+}
+
+function copyBundledToUserInstall(bundled: string, installed: string): boolean {
+  try {
+    fs.mkdirSync(getOfficeCliInstallDir(), { recursive: true })
+    fs.copyFileSync(bundled, installed)
+    if (process.platform !== 'win32') fs.chmodSync(installed, 0o755)
+    return true
+  } catch {
+    return false
+  }
+}
+
+/**
+ * Reconcile ~/.officecli/bin with the bundled binary.
+ *
+ * That directory is prepended to the CLI child's PATH, so it is the officecli
+ * the agent actually runs. Writing it only when absent pinned every session to
+ * the version from first launch, however far the app moved on: newer bundled
+ * wins now, a user install that outranks the bundle is left alone, and an
+ * unreadable version never triggers a 33 MB rewrite.
+ */
+export function syncInstalledOfficeCli(): OfficeCliSyncResult {
+  const bundled = getOfficeCliBinaryPath()
+  const installed = getOfficeCliInstalledBinary()
+
+  if (!fs.existsSync(bundled)) {
+    return { copied: false, reason: 'no-bundle', bundledVersion: null, installedVersion: null }
+  }
+
+  if (!fs.existsSync(installed)) {
+    const bundledVersion = readOfficeCliVersion(bundled)
+    if (!copyBundledToUserInstall(bundled, installed)) {
+      return { copied: false, reason: 'copy-failed', bundledVersion, installedVersion: null }
+    }
+    return { copied: true, reason: 'missing', bundledVersion, installedVersion: null }
+  }
+
+  const bundledVersion = readOfficeCliVersion(bundled)
+  const installedVersion = readOfficeCliVersion(installed)
+
+  if (!bundledVersion || !installedVersion) {
+    return { copied: false, reason: 'unknown-version', bundledVersion, installedVersion }
+  }
+  if (compareOfficeCliVersions(bundledVersion, installedVersion) <= 0) {
+    return { copied: false, reason: 'up-to-date', bundledVersion, installedVersion }
+  }
+
+  if (!copyBundledToUserInstall(bundled, installed)) {
+    return { copied: false, reason: 'copy-failed', bundledVersion, installedVersion }
+  }
+  return { copied: true, reason: 'outdated', bundledVersion, installedVersion }
+}
+
 // ===== Cross-platform process-tree termination =====
 
 /**
@@ -320,10 +409,23 @@ function readPngSize(filePath: string): { width: number; height: number } {
 
 /**
  * Ensure officecli is installed to the user-level PATH (~/.officecli/bin).
- * Idempotent: skips if already installed and version is retrievable.
+ * Idempotent: the bundled copy is (re)written whenever it is newer, so an app
+ * update actually reaches the officecli the agent runs.
  * Call inside app.whenReady(), non-blocking (do not await from the startup path).
  */
 export async function ensureOfficeCliInstalled(): Promise<void> {
+  const sync = syncInstalledOfficeCli()
+  if (sync.copied) {
+    info('OfficeCli', `Installed bundled officecli | reason=${sync.reason} | version=${sync.bundledVersion}`)
+    return
+  }
+  if (sync.reason === 'up-to-date') {
+    debug('OfficeCli', `Already up to date | version=${sync.installedVersion} | path=${getOfficeCliInstalledBinary()}`)
+    return
+  }
+
+  // No bundled binary to copy (or an unreadable version) — ask whichever binary
+  // resolves to install itself, as before.
   const binaryPath = resolveOfficeCliBinary()
 
   // No binary available anywhere — nothing to install
@@ -336,21 +438,6 @@ export async function ensureOfficeCliInstalled(): Promise<void> {
   if (binaryPath === 'officecli' || binaryPath === 'officecli.exe') {
     debug('OfficeCli', 'Using system PATH binary, skipping install')
     return
-  }
-
-  const installedPath = getOfficeCliInstalledBinary()
-
-  // Already installed and executable — skip
-  if (fs.existsSync(installedPath)) {
-    try {
-      const result = await execOfficeCli({ args: ['--version'], timeout: 5000 })
-      if (result.exitCode === 0) {
-        debug('OfficeCli', `Already installed | version=${result.stdout.trim()} | path=${installedPath}`)
-        return
-      }
-    } catch {
-      // version check failed, continue to reinstall
-    }
   }
 
   info('OfficeCli', `Installing | bundled=${binaryPath}`)
@@ -466,26 +553,27 @@ export async function downloadOfficeCliBinary(): Promise<string> {
   const installDir = getOfficeCliInstallDir()
   const installedPath = getOfficeCliInstalledBinary()
 
-  // If already installed and working, skip download
-  if (fs.existsSync(installedPath)) {
-    try {
-      const result = await execOfficeCli({ args: ['--version'], timeout: 5000 })
-      if (result.exitCode === 0) {
-        info('OfficeCli', `Already installed | version=${result.stdout.trim()} | path=${installedPath}`)
-        sendDownloadProgress({ stage: 'done', message: result.stdout.trim(), percent: 100 })
-        return installedPath
-      }
-    } catch {
-      // version check failed, continue to download
-    }
+  // Fetch latest release info
+  sendDownloadProgress({ stage: 'fetching', message: 'Fetching release info...', percent: 0 })
+  const release = (await fetchJson(`${GITHUB_API_URL}/latest`)) as GithubRelease
+  const latestVersion = (release.tag_name || '').replace(/^v/, '')
+
+  // Only a copy that is genuinely current may skip the download. Probing the
+  // resolved binary would report the bundle's version instead of the user
+  // copy's, which made this button a no-op for as long as ~/.officecli/bin
+  // held any runnable file — however stale.
+  const installedVersion = fs.existsSync(installedPath) ? readOfficeCliVersion(installedPath) : null
+  if (installedVersion && latestVersion && compareOfficeCliVersions(latestVersion, installedVersion) <= 0) {
+    info('OfficeCli', `Already up to date | version=${installedVersion} | path=${installedPath}`)
+    sendDownloadProgress({ stage: 'done', message: installedVersion, percent: 100 })
+    return installedPath
+  }
+  if (installedVersion) {
+    info('OfficeCli', `Upgrading user copy | ${installedVersion} → ${latestVersion || 'latest'}`)
   }
 
   // Ensure install directory exists
   fs.mkdirSync(installDir, { recursive: true })
-
-  // Fetch latest release info
-  sendDownloadProgress({ stage: 'fetching', message: 'Fetching release info...', percent: 0 })
-  const release = (await fetchJson(`${GITHUB_API_URL}/latest`)) as GithubRelease
 
   // Find matching asset
   const asset = release.assets?.find((a) => a.name === exeName)

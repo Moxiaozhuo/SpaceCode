@@ -23,7 +23,7 @@
  *
  * 环境变量：
  *   CUA_DRIVER_GITHUB_MIRROR  GitHub 镜像地址（如 https://ghfast.top）
- *   CUA_DRIVER_VERSION        指定版本（如 0.6.8），不指定则使用 baked 版本或最新
+ *   CUA_DRIVER_VERSION        指定版本（如 0.34.0），不指定则使用 baked 版本或最新
  */
 import { existsSync, mkdirSync, createWriteStream, readdirSync, rmSync, renameSync, statSync } from 'fs'
 import { join, dirname } from 'path'
@@ -57,7 +57,7 @@ const FORCE_VERSION = process.env.CUA_DRIVER_VERSION || ''
  * 官方 CD workflow 在每次 release 后自动更新此值。
  * 设置后可直接构造下载 URL，无需请求 GitHub API。
  */
-const BAKED_VERSION = '0.6.8'
+const BAKED_VERSION = '0.34.0'
 
 // ── 平台目标定义 ──────────────────────────────────────────────
 
